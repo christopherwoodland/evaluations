@@ -259,6 +259,16 @@ app.post(
         add("api-response-path", body.apiResponsePath || "choices.0.message.content");
       }
 
+      const runContext = buildRunContext({
+        mode,
+        url: body.url || DEFAULT_CHAT_URL,
+        networkTemplatePath: files.networkTemplateFile?.[0]?.path || body.networkTemplate || DEFAULT_NETWORK_TEMPLATE,
+        apiUrl: body.apiUrl || process.env.API_URL || "",
+        apiMethod: body.apiMethod || process.env.API_METHOD || "POST",
+        apiHeadersRaw: body.apiHeaders || "",
+        apiBodyTemplateRaw: body.apiBodyTemplate || "",
+      });
+
       const run = await runCommand("node", args, ROOT);
       const outputs = parseOutputPaths(run.stdout + "\n" + run.stderr);
 
@@ -271,6 +281,7 @@ app.post(
         stdout: run.stdout,
         stderr: run.stderr,
         outputs,
+        runContext,
       };
 
       if (run.code !== 0) {
@@ -493,4 +504,136 @@ function buildSafeCommand(args) {
   }
 
   return `node ${safeArgs.join(" ")}`;
+}
+
+function buildRunContext({ mode, url, networkTemplatePath, apiUrl, apiMethod, apiHeadersRaw, apiBodyTemplateRaw }) {
+  if (mode === "simplechat-api") {
+    return buildSimpleChatRunContext(url, networkTemplatePath);
+  }
+  if (mode === "api") {
+    return buildApiModeRunContext(apiUrl, apiMethod, apiHeadersRaw, apiBodyTemplateRaw);
+  }
+  return {
+    mode,
+    model: "n/a",
+    exampleRequest: {
+      note: "UI mode sends prompts through browser automation. Optional network capture can show underlying API calls.",
+    },
+  };
+}
+
+function buildSimpleChatRunContext(url, networkTemplatePath) {
+  try {
+    const templateAbs = safeResolveWorkspacePath(networkTemplatePath);
+    const events = JSON.parse(fs.readFileSync(templateAbs, "utf8"));
+    const req = events.find(
+      (e) => e.kind === "request" && e.method === "POST" && typeof e.url === "string" && e.url.includes("/api/chat/stream") && !e.url.includes("client-event")
+    );
+
+    if (!req || !req.postData) {
+      return {
+        mode: "simplechat-api",
+        model: "unknown",
+        exampleRequest: { note: "No /api/chat/stream request found in network template." },
+      };
+    }
+
+    const templateBody = JSON.parse(req.postData);
+    const model = detectModelFromBody(templateBody);
+    const body = {
+      ...templateBody,
+      message: "<query>",
+      conversation_id: "<created-per-row>",
+    };
+
+    return {
+      mode: "simplechat-api",
+      model,
+      exampleRequest: sanitizeObject({
+        method: req.method || "POST",
+        url: `${new URL(url).origin}/api/chat/stream`,
+        headers: {
+          accept: "application/json, text/event-stream, */*",
+          "content-type": "application/json",
+        },
+        body,
+      }),
+    };
+  } catch {
+    return {
+      mode: "simplechat-api",
+      model: "unknown",
+      exampleRequest: { note: "Could not parse network template for request preview." },
+    };
+  }
+}
+
+function buildApiModeRunContext(apiUrl, apiMethod, apiHeadersRaw, apiBodyTemplateRaw) {
+  let headers = {};
+  let body = { messages: [{ role: "user", content: "<query>" }] };
+
+  if (apiHeadersRaw) {
+    try {
+      headers = JSON.parse(apiHeadersRaw);
+    } catch {
+      headers = { _raw: "<invalid json>" };
+    }
+  }
+
+  if (apiBodyTemplateRaw) {
+    try {
+      body = JSON.parse(String(apiBodyTemplateRaw).replace(/\{\{\s*query\s*\}\}/g, "<query>"));
+    } catch {
+      body = { _raw: "<invalid json>" };
+    }
+  }
+
+  return {
+    mode: "api",
+    model: detectModelFromBody(body),
+    exampleRequest: sanitizeObject({
+      method: String(apiMethod || "POST").toUpperCase(),
+      url: apiUrl || "<api-url>",
+      headers: {
+        "content-type": "application/json",
+        ...headers,
+      },
+      body,
+    }),
+  };
+}
+
+function detectModelFromBody(body) {
+  const keys = ["model", "model_name", "deployment", "deployment_name", "engine", "modelId", "model_id"];
+  for (const key of keys) {
+    const val = body?.[key];
+    if (typeof val === "string" && val.trim()) return val.trim();
+  }
+  return "unknown";
+}
+
+function sanitizeObject(value) {
+  if (Array.isArray(value)) {
+    return value.map((v) => sanitizeObject(v));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    const key = String(k);
+    const lower = key.toLowerCase();
+    if (lower.includes("authorization") || lower.includes("token") || lower.includes("secret") || lower.includes("api_key") || lower === "key") {
+      out[key] = "[REDACTED]";
+      continue;
+    }
+
+    if (typeof v === "string") {
+      out[key] = v.replace(/([?&](?:token|access_token|api_key|apikey|key|sig|signature)=)([^&\s]+)/gi, "$1[REDACTED]");
+    } else {
+      out[key] = sanitizeObject(v);
+    }
+  }
+  return out;
 }

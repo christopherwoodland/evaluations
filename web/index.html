@@ -21,14 +21,37 @@
 
       <section class="wizard-card">
         <div class="steps" aria-label="Wizard steps">
-          <div class="step is-active" data-step="1"><span>1</span> Mode</div>
+          <div class="step is-active" data-step="0"><span>0</span> Setup</div>
+          <div class="step" data-step="1"><span>1</span> Mode</div>
           <div class="step" data-step="2"><span>2</span> Files</div>
           <div class="step" data-step="3"><span>3</span> Config</div>
           <div class="step" data-step="4"><span>4</span> Run</div>
         </div>
 
         <form id="wizardForm" class="wizard-form">
-          <section class="panel is-active" data-panel="1">
+          <section class="panel is-active" data-panel="0">
+            <h2>One-time SimpleChat setup</h2>
+            <p class="panel-lead">Before batch runs in SimpleChat API mode, capture one real session and request template.</p>
+
+            <div class="setup-box">
+              <ol>
+                <li>Open the SimpleChat page in a browser tab.</li>
+                <li>Sign in if prompted.</li>
+                <li>Send one chat message manually.</li>
+                <li>Run a setup check below to confirm auth state and network template files are present.</li>
+              </ol>
+
+              <div class="actions-row">
+                <a id="setupOpenChat" class="template-download" href="https://simplechatdemo-fjgpaqe7h6c7akbr.eastus-01.azurewebsites.net/chats" target="_blank" rel="noopener">Open SimpleChat</a>
+                <button id="setupCheckBtn" type="button" class="ghost">Check setup readiness</button>
+              </div>
+
+              <div id="setupStatus" class="preview-status">Setup check has not been run yet.</div>
+              <pre id="setupText" class="logs small"></pre>
+            </div>
+          </section>
+
+          <section class="panel" data-panel="1">
             <h2>Choose execution mode</h2>
             <p class="panel-lead">For this chat app, SimpleChat API mode is recommended.</p>
             <label class="check-row advanced-toggle">
@@ -233,6 +256,12 @@
 
             <div id="status" class="status" role="status" aria-live="polite">Ready.</div>
             <pre id="logs" class="logs"></pre>
+
+            <div class="preview-box">
+              <h3>Run context</h3>
+              <div id="modelUsed" class="preview-status">Model: unknown</div>
+              <pre id="apiExampleText" class="logs small">Example API call will appear after run.</pre>
+            </div>
 
             <div id="downloads" class="downloads hidden">
               <a id="excelLink" target="_blank" rel="noopener">Download Excel</a>

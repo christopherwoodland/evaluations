@@ -6,6 +6,8 @@ const nextBtn = document.getElementById("nextBtn");
 const runBtn = document.getElementById("runBtn");
 const statusEl = document.getElementById("status");
 const logsEl = document.getElementById("logs");
+const modelUsedEl = document.getElementById("modelUsed");
+const apiExampleTextEl = document.getElementById("apiExampleText");
 const downloadsEl = document.getElementById("downloads");
 const excelLink = document.getElementById("excelLink");
 const jsonlLink = document.getElementById("jsonlLink");
@@ -21,6 +23,10 @@ const refreshHistoryBtn = document.getElementById("refreshHistoryBtn");
 const clearHistoryBtn = document.getElementById("clearHistoryBtn");
 const historyListEl = document.getElementById("historyList");
 const showAdvancedModesEl = document.getElementById("showAdvancedModes");
+const setupOpenChatEl = document.getElementById("setupOpenChat");
+const setupCheckBtn = document.getElementById("setupCheckBtn");
+const setupStatusEl = document.getElementById("setupStatus");
+const setupTextEl = document.getElementById("setupText");
 const precheckBtn = document.getElementById("precheckBtn");
 const precheckStatusEl = document.getElementById("precheckStatus");
 const precheckTextEl = document.getElementById("precheckText");
@@ -30,6 +36,7 @@ const foundryStatusEl = document.getElementById("foundryStatus");
 
 let step = 1;
 let latestJsonlHref = "";
+const MAX_STEP = 4;
 
 function boolFromValue(value, fallback = false) {
   if (value == null) return fallback;
@@ -66,6 +73,10 @@ async function hydrateDefaults() {
     setInputValue("jsonlResponseKey", d.defaultJsonlResponseKey);
     setInputValue("jsonlGroundTruthKey", d.defaultJsonlGroundTruthKey);
     setInputValue("jsonlContextKey", d.defaultJsonlContextKey);
+
+    if (setupOpenChatEl && d.defaultChatUrl) {
+      setupOpenChatEl.href = String(d.defaultChatUrl);
+    }
 
     const strict = form.querySelector("input[name='strictSchema']");
     if (strict && d.defaultStrictSchema != null) {
@@ -198,12 +209,12 @@ function updateModeVisibility() {
 }
 
 function showStep(next) {
-  step = Math.max(1, Math.min(4, next));
+  step = Math.max(0, Math.min(MAX_STEP, next));
   panels.forEach((panel) => panel.classList.toggle("is-active", Number(panel.dataset.panel) === step));
   stepEls.forEach((el) => el.classList.toggle("is-active", Number(el.dataset.step) === step));
 
-  prevBtn.disabled = step === 1;
-  nextBtn.style.display = step === 4 ? "none" : "inline-block";
+  prevBtn.disabled = step === 0;
+  nextBtn.style.display = step === MAX_STEP ? "none" : "inline-block";
 }
 
 function setStatus(message, cls = "") {
@@ -233,6 +244,22 @@ function setDownloads(outputs) {
   if (exportFoundryBtn) exportFoundryBtn.disabled = !latestJsonlHref;
 }
 
+function setRunContext(runContext) {
+  if (!modelUsedEl || !apiExampleTextEl) return;
+  if (!runContext) {
+    modelUsedEl.textContent = "Model: unknown";
+    apiExampleTextEl.textContent = "Example API call will appear after run.";
+    return;
+  }
+
+  const model = runContext.model || "unknown";
+  const mode = runContext.mode || selectedMode();
+  modelUsedEl.textContent = `Mode: ${mode} | Model: ${model}`;
+
+  const example = runContext.exampleRequest || { note: "No example request available." };
+  apiExampleTextEl.textContent = JSON.stringify(example, null, 2);
+}
+
 function buildPrecheckPayload() {
   const mode = selectedMode();
   const get = (name) => form.querySelector(`[name='${name}']`)?.value || "";
@@ -244,6 +271,40 @@ function buildPrecheckPayload() {
     apiUrl: get("apiUrl"),
     headed: get("headed") || "true",
   };
+}
+
+async function runSetupCheck() {
+  setupStatusEl.textContent = "Running setup check...";
+  setupTextEl.textContent = "";
+  try {
+    const url = form.querySelector("[name='url']")?.value || "";
+    const stateFile = form.querySelector("[name='stateFile']")?.value || ".auth/storage-state.json";
+    const networkTemplate = form.querySelector("[name='networkTemplate']")?.value || "outputs/network-log-ui-full.json";
+
+    const res = await fetch("/api/precheck", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        mode: "simplechat-api",
+        url,
+        stateFile,
+        networkTemplate,
+        headed: "true",
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setupStatusEl.textContent = data.error || "Setup check failed.";
+      return;
+    }
+
+    setupStatusEl.textContent = data.ok
+      ? "Setup looks good for SimpleChat API mode."
+      : "Setup incomplete. Follow the checklist and retry.";
+    setupTextEl.textContent = (data.checks || []).map((c) => `${c.ok ? "[OK]" : "[FAIL]"} ${c.key}: ${c.message}`).join("\n");
+  } catch (err) {
+    setupStatusEl.textContent = `Setup check failed: ${err.message}`;
+  }
 }
 
 async function runPrecheck() {
@@ -388,6 +449,10 @@ async function clearRunHistory() {
 }
 
 function validateCurrentStep() {
+  if (step === 0) {
+    setStatus("Continue to mode selection once setup is ready.");
+    return true;
+  }
   if (step !== 2) return true;
   const input = form.querySelector("input[name='inputFile']");
   if (!input?.files?.length) {
@@ -408,6 +473,7 @@ form.querySelectorAll("input[name='mode']").forEach((el) => {
   el.addEventListener("change", updateModeVisibility);
 });
 showAdvancedModesEl?.addEventListener("change", updateModeVisibility);
+setupCheckBtn?.addEventListener("click", runSetupCheck);
 
 jsonlProfileEl?.addEventListener("change", updateProfileUI);
 jsonlProfileEl?.addEventListener("change", updateProfilePreview);
@@ -440,6 +506,7 @@ form.addEventListener("submit", async (ev) => {
   fd.set("strictSchema", strictSchema ? "true" : "false");
   setStatus("Running evaluation. This may take a while...", "");
   logsEl.textContent = "";
+  setRunContext(null);
   setDownloads(null);
   runBtn.disabled = true;
 
@@ -464,6 +531,7 @@ form.addEventListener("submit", async (ev) => {
 
     setStatus("Run complete. Download your artifacts below.", "ok");
     setDownloads(data.outputs || {});
+    setRunContext(data.runContext || null);
     await previewLatestJsonl();
     await refreshRunHistory();
     foundryStatusEl.textContent = "Run complete. You can export latest JSONL to Foundry folder.";
@@ -475,7 +543,7 @@ form.addEventListener("submit", async (ev) => {
 });
 
 updateModeVisibility();
-showStep(1);
+showStep(0);
 hydrateDefaults();
 updateProfileUI();
 updateProfilePreview();

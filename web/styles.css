@@ -93,7 +93,7 @@ h1 {
 
 .steps {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 0.6rem;
   padding: 1rem;
   border-bottom: 1px solid var(--line);
@@ -148,6 +148,23 @@ h2 {
 .panel-lead {
   color: var(--muted);
   margin-top: 0;
+}
+
+.setup-box {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.8rem;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.setup-box ol {
+  margin: 0 0 0.8rem;
+  padding-left: 1.1rem;
+  color: var(--muted);
+}
+
+.setup-box li {
+  margin: 0.25rem 0;
 }
 
 .mode-grid {

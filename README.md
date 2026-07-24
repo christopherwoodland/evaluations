@@ -68,6 +68,7 @@ If that port is unavailable, the server automatically falls back (for example to
 
 Wizard flow:
 
+0. Complete one-time setup (open chat app, sign in, send one manual message, run readiness check)
 1. Pick mode (`simplechat-api`, `ui`, or `api`)
 2. Upload spreadsheet (and optional helper files)
 3. Configure columns/options
