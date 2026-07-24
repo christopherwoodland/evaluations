@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SimpleChat Eval Wizard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="bg-orb orb-a"></div>
+    <div class="bg-orb orb-b"></div>
+    <main class="shell">
+      <section class="hero">
+        <p class="kicker">Evaluation Flow</p>
+        <h1>Prompt Runner Wizard</h1>
+        <p class="subtitle">Upload a spreadsheet, select run mode, execute, and export Excel + JSONL for Foundry evaluation.</p>
+      </section>
+
+      <section class="wizard-card">
+        <div class="steps" aria-label="Wizard steps">
+          <div class="step is-active" data-step="1"><span>1</span> Mode</div>
+          <div class="step" data-step="2"><span>2</span> Files</div>
+          <div class="step" data-step="3"><span>3</span> Config</div>
+          <div class="step" data-step="4"><span>4</span> Run</div>
+        </div>
+
+        <form id="wizardForm" class="wizard-form">
+          <section class="panel is-active" data-panel="1">
+            <h2>Choose execution mode</h2>
+            <p class="panel-lead">For this chat app, SimpleChat API mode is recommended.</p>
+            <label class="check-row advanced-toggle">
+              <input type="checkbox" id="showAdvancedModes" />
+              <span>Show advanced modes (UI Playwright, Generic API)</span>
+            </label>
+            <div class="mode-grid">
+              <label class="mode">
+                <input type="radio" name="mode" value="simplechat-api" checked />
+                <strong>SimpleChat API</strong>
+                <small>Uses your signed-in session and direct /api/chat/stream calls.</small>
+              </label>
+              <label class="mode mode-advanced">
+                <input type="radio" name="mode" value="ui" />
+                <strong>UI (Playwright)</strong>
+                <small>Automates browser interactions on the chat page.</small>
+              </label>
+              <label class="mode mode-advanced">
+                <input type="radio" name="mode" value="api" />
+                <strong>Generic API</strong>
+                <small>Call a custom endpoint with JSON body template.</small>
+              </label>
+            </div>
+          </section>
+
+          <section class="panel" data-panel="2">
+            <h2>Upload required files</h2>
+            <div class="template-cta">
+              <a href="/examples/input-template.xlsx" class="template-download" download>Download Example Excel Input</a>
+            </div>
+            <div class="field-grid">
+              <label class="field">
+                <span>Input spreadsheet (.xlsx or .csv)</span>
+                <input type="file" name="inputFile" accept=".xlsx,.xlsm,.csv,.tsv" required />
+              </label>
+              <label class="field mode-simplechat">
+                <span>Network template file (optional)</span>
+                <input type="file" name="networkTemplateFile" accept=".json" />
+                <small>Skip this if outputs/network-log-ui-full.json already exists.</small>
+              </label>
+              <label class="field mode-ui">
+                <span>Selectors file (optional)</span>
+                <input type="file" name="selectorsFile" accept=".json" />
+              </label>
+            </div>
+          </section>
+
+          <section class="panel" data-panel="3">
+            <h2>Configure run options</h2>
+            <div class="field-grid two-col">
+              <label class="field">
+                <span>Query column</span>
+                <input type="text" name="queryColumn" value="query" />
+              </label>
+              <label class="field">
+                <span>Reference column</span>
+                <input type="text" name="referenceColumn" value="reference_answer" />
+              </label>
+              <label class="field">
+                <span>Context column (optional)</span>
+                <input type="text" name="contextColumn" value="context" />
+              </label>
+              <label class="field">
+                <span>Chat URL</span>
+                <input type="text" name="url" value="https://simplechatdemo-fjgpaqe7h6c7akbr.eastus-01.azurewebsites.net/chats" />
+              </label>
+              <label class="field">
+                <span>State file</span>
+                <input type="text" name="stateFile" value=".auth/storage-state.json" />
+              </label>
+              <label class="field">
+                <span>Output directory</span>
+                <input type="text" name="outputDir" value="outputs" />
+              </label>
+              <label class="field mode-simplechat">
+                <span>Network template path</span>
+                <input type="text" name="networkTemplate" value="outputs/network-log-ui-full.json" />
+              </label>
+              <label class="field mode-ui">
+                <span>Selectors path</span>
+                <input type="text" name="selectors" value="selectors.example.json" />
+              </label>
+              <label class="field mode-ui">
+                <span>Headed</span>
+                <select name="headed">
+                  <option value="true" selected>true</option>
+                  <option value="false">false</option>
+                </select>
+              </label>
+              <label class="field mode-ui">
+                <span>New chat per row</span>
+                <select name="newChat">
+                  <option value="true" selected>true</option>
+                  <option value="false">false</option>
+                </select>
+              </label>
+              <label class="field mode-ui">
+                <span>Capture network log</span>
+                <select name="debugNetwork">
+                  <option value="false" selected>false</option>
+                  <option value="true">true</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Timeout (ms)</span>
+                <input type="number" name="timeoutMs" value="45000" min="1000" step="500" />
+              </label>
+              <label class="field">
+                <span>Wait after send (ms)</span>
+                <input type="number" name="waitMs" value="500" min="0" step="100" />
+              </label>
+            </div>
+
+            <div class="jsonl-options">
+              <h3>JSONL output options</h3>
+              <label class="field">
+                <span>Export profile</span>
+                <select name="jsonlProfile" id="jsonlProfile">
+                  <option value="foundry-basic" selected>Foundry Basic (query, response, ground_truth)</option>
+                  <option value="foundry-context">Foundry + Context (query, response, ground_truth, context)</option>
+                  <option value="custom">Custom mapping</option>
+                </select>
+              </label>
+              <label class="check-row">
+                <input type="checkbox" name="includeGroundTruth" checked />
+                <span>Include <strong>ground_truth</strong></span>
+              </label>
+              <label class="check-row">
+                <input type="checkbox" name="includeContext" />
+                <span>Include <strong>context</strong> (if input has context column)</span>
+              </label>
+              <label class="check-row">
+                <input type="checkbox" name="includeMetadata" />
+                <span>Include optional <strong>meta</strong> block (status, error, timestamp)</span>
+              </label>
+              <label class="check-row">
+                <input type="checkbox" name="strictSchema" />
+                <span>Strict schema mode (fail if required fields are blank/missing)</span>
+              </label>
+              <label class="check-row">
+                <input type="checkbox" name="maskLogs" checked />
+                <span>Mask sensitive values in run logs</span>
+              </label>
+
+              <div id="customMap" class="field-grid two-col hidden">
+                <label class="field">
+                  <span>JSONL key for query</span>
+                  <input type="text" name="jsonlQueryKey" value="query" />
+                </label>
+                <label class="field">
+                  <span>JSONL key for response</span>
+                  <input type="text" name="jsonlResponseKey" value="response" />
+                </label>
+                <label class="field">
+                  <span>JSONL key for ground truth</span>
+                  <input type="text" name="jsonlGroundTruthKey" value="ground_truth" />
+                </label>
+                <label class="field">
+                  <span>JSONL key for context</span>
+                  <input type="text" name="jsonlContextKey" value="context" />
+                </label>
+              </div>
+
+              <div class="profile-preview-box">
+                <h4>Export profile preview</h4>
+                <div id="profilePreviewStatus" class="preview-status">Preview updates as you change profile and key fields.</div>
+                <pre id="profilePreviewText" class="logs small"></pre>
+              </div>
+            </div>
+
+            <details class="api-box mode-api">
+              <summary>Generic API advanced fields</summary>
+              <div class="field-grid">
+                <label class="field">
+                  <span>API URL</span>
+                  <input type="text" name="apiUrl" placeholder="https://your-endpoint/chat" />
+                </label>
+                <label class="field">
+                  <span>API method</span>
+                  <input type="text" name="apiMethod" value="POST" />
+                </label>
+                <label class="field">
+                  <span>API headers (JSON)</span>
+                  <textarea name="apiHeaders" rows="3" placeholder='{"Authorization":"Bearer ..."}'></textarea>
+                </label>
+                <label class="field">
+                  <span>API body template (JSON)</span>
+                  <textarea name="apiBodyTemplate" rows="4" placeholder='{"messages":[{"role":"user","content":"{{query}}"}]}'></textarea>
+                </label>
+                <label class="field">
+                  <span>Response path</span>
+                  <input type="text" name="apiResponsePath" value="choices.0.message.content" />
+                </label>
+              </div>
+            </details>
+          </section>
+
+          <section class="panel" data-panel="4">
+            <h2>Run and export</h2>
+            <p class="panel-lead">Start the run and monitor logs below.</p>
+            <button id="runBtn" type="submit" class="run-btn">Run Evaluation</button>
+
+            <div id="status" class="status" role="status" aria-live="polite">Ready.</div>
+            <pre id="logs" class="logs"></pre>
+
+            <div id="downloads" class="downloads hidden">
+              <a id="excelLink" target="_blank" rel="noopener">Download Excel</a>
+              <a id="jsonlLink" target="_blank" rel="noopener">Download JSONL</a>
+              <a id="networkLink" target="_blank" rel="noopener">Download Network Log</a>
+            </div>
+
+            <div class="precheck-box">
+              <h3>Connectivity precheck</h3>
+              <button id="precheckBtn" type="button" class="ghost">Run precheck</button>
+              <div id="precheckStatus" class="preview-status">Precheck has not been run yet.</div>
+              <pre id="precheckText" class="logs small"></pre>
+            </div>
+
+            <div class="preview-box">
+              <h3>JSONL preview and validation</h3>
+              <button id="previewBtn" type="button" class="ghost" disabled>Preview latest JSONL</button>
+              <div id="previewStatus" class="preview-status">Run first to preview.</div>
+              <pre id="previewText" class="logs small"></pre>
+            </div>
+
+            <div class="history-box">
+              <h3>Recent runs</h3>
+              <div class="actions-row">
+                <button id="refreshHistoryBtn" type="button" class="ghost">Refresh history</button>
+                <button id="clearHistoryBtn" type="button" class="ghost danger">Clear history</button>
+              </div>
+              <div id="historyList" class="history-list"></div>
+            </div>
+
+            <div class="foundry-box">
+              <h3>Foundry export helper</h3>
+              <label class="field">
+                <span>Target folder</span>
+                <input type="text" id="foundryTargetDir" value="foundry_exports" />
+              </label>
+              <button id="exportFoundryBtn" type="button" class="ghost" disabled>Copy latest JSONL to Foundry folder</button>
+              <div id="foundryStatus" class="preview-status">Run first to enable export.</div>
+            </div>
+          </section>
+
+          <div class="wizard-nav">
+            <button type="button" id="prevBtn" class="ghost">Back</button>
+            <button type="button" id="nextBtn" class="primary">Next</button>
+          </div>
+        </form>
+      </section>
+    </main>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

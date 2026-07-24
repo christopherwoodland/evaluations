@@ -1,0 +1,32 @@
+{
+  "startChat": [
+    "button:has-text('Start chatting')",
+    "button:has-text('Start Chatting')",
+    "button:has-text('Start chat')"
+  ],
+  "newChat": [
+    "button:has-text('New chat')",
+    "button:has-text('New Chat')"
+  ],
+  "input": [
+    "textarea",
+    "[contenteditable='true'][role='textbox']",
+    "input[type='text']"
+  ],
+  "send": [
+    "button[aria-label*='Send' i]",
+    "button:has-text('Send')",
+    "[data-testid*='send']"
+  ],
+  "assistantMessages": [
+    "[data-role='assistant']",
+    "[data-testid*='assistant']",
+    ".assistant-message",
+    ".message.assistant"
+  ],
+  "typingIndicators": [
+    "[data-testid*='typing']",
+    ".typing-indicator",
+    ".loading"
+  ]
+}

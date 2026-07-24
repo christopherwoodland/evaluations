@@ -1,0 +1,4 @@
+node_modules/
+outputs/
+.auth/
+*.log

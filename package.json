@@ -1,0 +1,25 @@
+{
+  "name": "simplechat-eval-runner",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Run spreadsheet prompts through Simple Chat UI or API and export evaluation outputs.",
+  "type": "module",
+  "scripts": {
+    "wizard": "node src/server.mjs",
+    "wizard:dev": "node src/server.mjs",
+    "run": "node src/run-chat-eval.mjs",
+    "run:ui": "node src/run-chat-eval.mjs --mode ui",
+    "run:api": "node src/run-chat-eval.mjs --mode api",
+    "smoke": "node src/smoke-test.mjs",
+    "smoke:api": "node src/smoke-test-api.mjs",
+    "smoke:all": "npm run smoke && npm run smoke:api"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "minimist": "^1.2.8",
+    "multer": "^2.0.2",
+    "playwright": "^1.55.0",
+    "xlsx": "^0.18.5"
+  }
+}

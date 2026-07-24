@@ -1,0 +1,2 @@
+{"query":"What is the capital of France?","response":"The capital of France is Paris.","ground_truth":"Paris"}
+{"query":"Explain REST APIs in one sentence.","response":"A REST API is a web interface that lets applications exchange and manipulate resources over HTTP using standard methods such as GET, POST, PUT, and DELETE.","ground_truth":"REST APIs are HTTP interfaces that expose resources through standard methods like GET and POST."}
