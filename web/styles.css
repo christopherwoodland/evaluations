@@ -403,6 +403,44 @@ button.danger {
   accent-color: var(--brand);
 }
 
+.metrics-list {
+  margin-top: 0.6rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem 0.7rem;
+}
+
+.metrics-list label {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.45rem 0.55rem;
+  background: #0d1720;
+}
+
+.metrics-list small {
+  color: var(--muted);
+  display: block;
+  margin-left: 1.6rem;
+  margin-top: 0.2rem;
+}
+
+.metrics-summary {
+  margin-top: 0.6rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.metric-chip {
+  border: 1px solid var(--line);
+  background: linear-gradient(150deg, #152330, #101923);
+  border-radius: 10px;
+  padding: 0.5rem 0.6rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
 .api-box summary {
   cursor: pointer;
   color: #bee4df;
@@ -449,6 +487,11 @@ button:disabled {
 }
 
 .run-btn {
+  width: 100%;
+  margin-bottom: 0.8rem;
+}
+
+.run-secondary {
   width: 100%;
   margin-bottom: 0.8rem;
 }

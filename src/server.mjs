@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import xlsx from "xlsx";
 import dotenv from "dotenv";
+import { request } from "playwright";
 
 dotenv.config();
 
@@ -29,6 +30,7 @@ const outputsDir = path.join(ROOT, "outputs");
 const authDir = path.join(ROOT, ".auth");
 const examplesDir = path.join(ROOT, "examples");
 const historyPath = path.join(outputsDir, "run-history.json");
+const lastRunPayloadPath = path.join(outputsDir, "last-run-payload.json");
 
 for (const dir of [uploadsDir, outputsDir, authDir, examplesDir]) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -102,10 +104,11 @@ app.post("/api/precheck", async (req, res) => {
     if (mode === "simplechat-api") {
       const stateAbs = safeResolveWorkspacePath(stateFile);
       const templateAbs = safeResolveWorkspacePath(networkTemplate);
+      const hasState = fs.existsSync(stateAbs);
       checks.push({
         key: "stateFile",
-        ok: fs.existsSync(stateAbs),
-        message: fs.existsSync(stateAbs) ? `State file found: ${stateFile}` : `Missing state file: ${stateFile}`,
+        ok: hasState,
+        message: hasState ? `State file found: ${stateFile}` : `Missing state file: ${stateFile}`,
       });
       checks.push({
         key: "networkTemplate",
@@ -114,6 +117,11 @@ app.post("/api/precheck", async (req, res) => {
           ? `Network template found: ${networkTemplate}`
           : `Missing network template: ${networkTemplate}`,
       });
+
+      if (parsed.ok && hasState) {
+        const authCheck = await checkSimpleChatAuth(url, stateAbs);
+        checks.push(authCheck);
+      }
     }
 
     if (mode === "ui") {
@@ -188,6 +196,46 @@ app.post("/api/run-history/clear", (_, res) => {
   }
 });
 
+app.get("/api/last-run-payload", (_, res) => {
+  try {
+    if (!fs.existsSync(lastRunPayloadPath)) {
+      return res.json({ ok: true, payload: null });
+    }
+    const parsed = JSON.parse(fs.readFileSync(lastRunPayloadPath, "utf8"));
+    return res.json({ ok: true, payload: parsed });
+  } catch {
+    return res.json({ ok: true, payload: null });
+  }
+});
+
+app.post("/api/rerun", async (req, res) => {
+  try {
+    if (!fs.existsSync(lastRunPayloadPath)) {
+      return res.status(404).json({ ok: false, error: "No previous run payload found." });
+    }
+
+    const payload = JSON.parse(fs.readFileSync(lastRunPayloadPath, "utf8"));
+    const merged = {
+      ...(payload || {}),
+      ...(req.body || {}),
+    };
+
+    if (!merged.inputPath) {
+      return res.status(400).json({ ok: false, error: "Saved payload missing inputPath." });
+    }
+
+    const inputAbs = safeResolveWorkspacePath(merged.inputPath);
+    if (!fs.existsSync(inputAbs)) {
+      return res.status(404).json({ ok: false, error: `Input file no longer exists: ${merged.inputPath}` });
+    }
+
+    const runResult = await executeRunFromRequest({ body: merged, inputPathAbs: inputAbs, uploadedInputPath: inputAbs });
+    return res.status(runResult.statusCode).json(runResult.response);
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message || String(error) });
+  }
+});
+
 app.post(
   "/api/run",
   upload.fields([
@@ -208,103 +256,8 @@ app.post(
         return res.status(400).json({ ok: false, error: validationError });
       }
 
-      const body = req.body || {};
-      const mode = String(body.mode || "simplechat-api");
-      const args = ["src/run-chat-eval.mjs", "--mode", mode, "--input", input.path];
-
-      const add = (key, val) => {
-        if (val === undefined || val === null || val === "") return;
-        args.push(`--${key}`, String(val));
-      };
-
-      add("query-column", body.queryColumn || "query");
-      add("reference-column", body.referenceColumn || "reference_answer");
-      add("context-column", body.contextColumn || "");
-      add("output-dir", body.outputDir || DEFAULT_OUTPUT_DIR);
-      add("url", body.url || DEFAULT_CHAT_URL);
-      add("state-file", body.stateFile || DEFAULT_STATE_FILE);
-      add("timeout-ms", body.timeoutMs || process.env.TIMEOUT_MS || "45000");
-      add("wait-ms", body.waitMs || process.env.WAIT_MS || "500");
-      add("include-ground-truth", body.includeGroundTruth === "false" ? "false" : "true");
-      add("include-context", body.includeContext === "true" ? "true" : "false");
-      add("include-metadata", body.includeMetadata === "true" ? "true" : "false");
-      add("strict-schema", body.strictSchema === "true" ? "true" : "false");
-      add("jsonl-profile", body.jsonlProfile || "foundry-basic");
-      add("jsonl-query-key", body.jsonlQueryKey || "query");
-      add("jsonl-response-key", body.jsonlResponseKey || "response");
-      add("jsonl-ground-truth-key", body.jsonlGroundTruthKey || "ground_truth");
-      add("jsonl-context-key", body.jsonlContextKey || "context");
-
-      if (mode === "simplechat-api") {
-        const netTemplate = files.networkTemplateFile?.[0]?.path || body.networkTemplate || DEFAULT_NETWORK_TEMPLATE;
-        add("network-template", netTemplate);
-      }
-
-      if (mode === "ui") {
-        const selectorsPath = files.selectorsFile?.[0]?.path || body.selectors || DEFAULT_SELECTORS;
-        add("selectors", selectorsPath);
-        add("new-chat", body.newChat === "true" ? "true" : "false");
-        add("headed", body.headed === "false" ? "false" : "true");
-        if (body.debugNetwork === "true") {
-          add("debug-network", "true");
-          add("network-log", "outputs/network-log-ui-full.json");
-        }
-      }
-
-      if (mode === "api") {
-        add("api-url", body.apiUrl || "");
-        add("api-method", body.apiMethod || "POST");
-        add("api-headers", body.apiHeaders || "");
-        add("api-body-template", body.apiBodyTemplate || "");
-        add("api-response-path", body.apiResponsePath || "choices.0.message.content");
-      }
-
-      const runContext = buildRunContext({
-        mode,
-        url: body.url || DEFAULT_CHAT_URL,
-        networkTemplatePath: files.networkTemplateFile?.[0]?.path || body.networkTemplate || DEFAULT_NETWORK_TEMPLATE,
-        apiUrl: body.apiUrl || process.env.API_URL || "",
-        apiMethod: body.apiMethod || process.env.API_METHOD || "POST",
-        apiHeadersRaw: body.apiHeaders || "",
-        apiBodyTemplateRaw: body.apiBodyTemplate || "",
-      });
-
-      const run = await runCommand("node", args, ROOT);
-      const outputs = parseOutputPaths(run.stdout + "\n" + run.stderr);
-
-      const safeCommand = buildSafeCommand(args);
-
-      const response = {
-        ok: run.code === 0,
-        exitCode: run.code,
-        command: safeCommand,
-        stdout: run.stdout,
-        stderr: run.stderr,
-        outputs,
-        runContext,
-      };
-
-      if (run.code !== 0) {
-        appendRunHistory({
-          ok: false,
-          mode,
-          createdAt: new Date().toISOString(),
-          outputs,
-          command: safeCommand,
-          error: run.stderr || run.stdout,
-        });
-        return res.status(500).json(response);
-      }
-
-      appendRunHistory({
-        ok: true,
-        mode,
-        createdAt: new Date().toISOString(),
-        outputs,
-        command: safeCommand,
-      });
-
-      return res.json(response);
+      const runResult = await executeRunFromRequest({ body: req.body || {}, inputPathAbs: input.path, uploadedInputPath: input.path, files });
+      return res.status(runResult.statusCode).json(runResult.response);
     } catch (error) {
       return res.status(500).json({ ok: false, error: error.message || String(error) });
     }
@@ -401,12 +354,11 @@ function ensureExampleTemplate() {
   const rows = [
     {
       query: "What is the capital of France?",
-      reference_answer: "Paris",
+      response: "",
     },
     {
       query: "Explain REST APIs in one sentence.",
-      reference_answer:
-        "REST APIs are HTTP interfaces that expose resources through standard methods like GET and POST.",
+      response: "",
     },
   ];
 
@@ -636,4 +588,159 @@ function sanitizeObject(value) {
     }
   }
   return out;
+}
+
+async function executeRunFromRequest({ body, inputPathAbs, uploadedInputPath, files = {} }) {
+  const mode = String(body.mode || "simplechat-api");
+  const args = ["src/run-chat-runner.mjs", "--mode", mode, "--input", inputPathAbs];
+
+  const add = (key, val) => {
+    if (val === undefined || val === null || val === "") return;
+    args.push(`--${key}`, String(val));
+  };
+
+  add("query-column", body.queryColumn || "query");
+  add("reference-column", body.referenceColumn || "response");
+  add("context-column", body.contextColumn || "");
+  add("output-dir", body.outputDir || DEFAULT_OUTPUT_DIR);
+  add("url", body.url || DEFAULT_CHAT_URL);
+  add("state-file", body.stateFile || DEFAULT_STATE_FILE);
+  add("timeout-ms", body.timeoutMs || process.env.TIMEOUT_MS || "45000");
+  add("wait-ms", body.waitMs || process.env.WAIT_MS || "500");
+  add("include-ground-truth", body.includeGroundTruth === "false" ? "false" : "true");
+  add("include-context", body.includeContext === "true" ? "true" : "false");
+  add("include-metadata", body.includeMetadata === "true" ? "true" : "false");
+  add("strict-schema", body.strictSchema === "true" ? "true" : "false");
+  add("jsonl-profile", body.jsonlProfile || "foundry-basic");
+  add("jsonl-query-key", body.jsonlQueryKey || "query");
+  add("jsonl-response-key", body.jsonlResponseKey || "response");
+  add("jsonl-ground-truth-key", body.jsonlGroundTruthKey || "ground_truth");
+  add("jsonl-context-key", body.jsonlContextKey || "context");
+
+  const runId = new Date().toISOString().replace(/[.:]/g, "-");
+
+  if (mode === "simplechat-api") {
+    const netTemplate = files.networkTemplateFile?.[0]?.path || body.networkTemplate || DEFAULT_NETWORK_TEMPLATE;
+    add("network-template", netTemplate);
+  }
+
+  if (mode === "ui") {
+    const selectorsPath = files.selectorsFile?.[0]?.path || body.selectors || DEFAULT_SELECTORS;
+    add("selectors", selectorsPath);
+    add("new-chat", body.newChat === "true" ? "true" : "false");
+    add("headed", body.headed === "false" ? "false" : "true");
+    if (body.debugNetwork === "true") {
+      add("debug-network", "true");
+      add("network-log", "outputs/network-log-ui-full.json");
+    }
+  }
+
+  if (mode === "api") {
+    add("api-url", body.apiUrl || "");
+    add("api-method", body.apiMethod || "POST");
+    add("api-headers", body.apiHeaders || "");
+    add("api-body-template", body.apiBodyTemplate || "");
+    add("api-response-path", body.apiResponsePath || "choices.0.message.content");
+  }
+
+  const runContext = buildRunContext({
+    mode,
+    url: body.url || DEFAULT_CHAT_URL,
+    networkTemplatePath: files.networkTemplateFile?.[0]?.path || body.networkTemplate || DEFAULT_NETWORK_TEMPLATE,
+    apiUrl: body.apiUrl || process.env.API_URL || "",
+    apiMethod: body.apiMethod || process.env.API_METHOD || "POST",
+    apiHeadersRaw: body.apiHeaders || "",
+    apiBodyTemplateRaw: body.apiBodyTemplate || "",
+  });
+
+  add("run-id", runId);
+  add("run-timestamp", new Date().toISOString());
+  add("run-model", runContext.model || "unknown");
+
+  const run = await runCommand("node", args, ROOT);
+  const outputs = parseOutputPaths(run.stdout + "\n" + run.stderr);
+
+  const safeCommand = buildSafeCommand(args);
+  const response = {
+    ok: run.code === 0,
+    exitCode: run.code,
+    command: safeCommand,
+    stdout: run.stdout,
+    stderr: run.stderr,
+    outputs,
+    runContext,
+  };
+
+  if (run.code !== 0) {
+    appendRunHistory({
+      ok: false,
+      mode,
+      createdAt: new Date().toISOString(),
+      outputs,
+      command: safeCommand,
+      error: run.stderr || run.stdout,
+    });
+    return { statusCode: 500, response };
+  }
+
+  appendRunHistory({
+    ok: true,
+    mode,
+    createdAt: new Date().toISOString(),
+    outputs,
+    command: safeCommand,
+  });
+
+  const persistPayload = {
+    ...body,
+    inputPath: toWorkspaceRelativePath(uploadedInputPath),
+  };
+  fs.writeFileSync(lastRunPayloadPath, JSON.stringify(persistPayload, null, 2), "utf8");
+
+  return { statusCode: 200, response };
+}
+
+async function checkSimpleChatAuth(url, statePath) {
+  try {
+    const baseURL = new URL(url).origin;
+    const ctx = await request.newContext({
+      baseURL,
+      storageState: statePath,
+      extraHTTPHeaders: {
+        accept: "application/json, text/event-stream, */*",
+      },
+    });
+
+    const res = await ctx.get("/api/user/settings");
+    const status = res.status();
+    await ctx.dispose();
+
+    if (status === 200) {
+      return {
+        key: "savedAuth",
+        ok: true,
+        message: "Saved auth state can access /api/user/settings.",
+      };
+    }
+
+    if (status === 401) {
+      return {
+        key: "savedAuth",
+        ok: false,
+        message: "Saved auth state is no longer valid (401). Re-run UI mode headed=true and sign in again.",
+      };
+    }
+
+    return {
+      key: "savedAuth",
+      ok: false,
+      message: `Saved auth check returned HTTP ${status}.`,
+    };
+  } catch (error) {
+    return {
+      key: "savedAuth",
+      ok: false,
+      message: `Saved auth check failed: ${error.message || String(error)}`,
+    };
+  }
 }

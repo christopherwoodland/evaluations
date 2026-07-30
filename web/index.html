@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SimpleChat Eval Wizard</title>
+    <title>SimpleChat Prompt Runner Wizard</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -14,9 +14,9 @@
     <div class="bg-orb orb-b"></div>
     <main class="shell">
       <section class="hero">
-        <p class="kicker">Evaluation Flow</p>
+        <p class="kicker">Prompt Flow</p>
         <h1>Prompt Runner Wizard</h1>
-        <p class="subtitle">Upload a spreadsheet, select run mode, execute, and export Excel + JSONL for Foundry evaluation.</p>
+        <p class="subtitle">Upload a spreadsheet, select run mode, execute, and export Excel + JSONL.</p>
       </section>
 
       <section class="wizard-card">
@@ -108,7 +108,7 @@
               </label>
               <label class="field">
                 <span>Reference column</span>
-                <input type="text" name="referenceColumn" value="reference_answer" />
+                <input type="text" name="referenceColumn" value="response" />
               </label>
               <label class="field">
                 <span>Context column (optional)</span>
@@ -222,6 +222,7 @@
               </div>
             </div>
 
+
             <details class="api-box mode-api">
               <summary>Generic API advanced fields</summary>
               <div class="field-grid">
@@ -252,7 +253,8 @@
           <section class="panel" data-panel="4">
             <h2>Run and export</h2>
             <p class="panel-lead">Start the run and monitor logs below.</p>
-            <button id="runBtn" type="submit" class="run-btn">Run Evaluation</button>
+            <button id="runBtn" type="submit" class="run-btn">Run</button>
+            <button id="rerunBtn" type="button" class="ghost run-secondary">Rerun Last Config</button>
 
             <div id="status" class="status" role="status" aria-live="polite">Ready.</div>
             <pre id="logs" class="logs"></pre>
