@@ -25,6 +25,7 @@ const clearHistoryBtn = document.getElementById("clearHistoryBtn");
 const historyListEl = document.getElementById("historyList");
 const showAdvancedModesEl = document.getElementById("showAdvancedModes");
 const setupOpenChatEl = document.getElementById("setupOpenChat");
+const refreshAuthBtn = document.getElementById("refreshAuthBtn");
 const setupCheckBtn = document.getElementById("setupCheckBtn");
 const setupStatusEl = document.getElementById("setupStatus");
 const setupTextEl = document.getElementById("setupText");
@@ -38,6 +39,7 @@ const foundryStatusEl = document.getElementById("foundryStatus");
 let step = 1;
 let latestJsonlHref = "";
 const MAX_STEP = 4;
+let hasAutoSetupRun = false;
 
 function boolFromValue(value, fallback = false) {
   if (value == null) return fallback;
@@ -275,8 +277,34 @@ function buildPrecheckPayload() {
   };
 }
 
-async function runSetupCheck() {
-  setupStatusEl.textContent = "Running setup check...";
+function renderChecks(checks) {
+  return (checks || []).map((c) => `${c.ok ? "[OK]" : "[FAIL]"} ${c.key}: ${c.message}`).join("\n");
+}
+
+function applySetupCheckResult(data, options = {}) {
+  const autoAdvance = Boolean(options.autoAdvance);
+  const source = options.source || "manual";
+
+  setupStatusEl.textContent = data.ok
+    ? "Setup looks good for SimpleChat API mode."
+    : "Setup incomplete. Follow the checklist and retry.";
+  setupTextEl.textContent = renderChecks(data.checks || []);
+
+  if (data.ok && autoAdvance && step === 0) {
+    showStep(1);
+    setStatus("Saved login is valid. Step 0 completed automatically.", "ok");
+  }
+
+  if (!data.ok && source === "auto") {
+    setStatus("Step 0 needs sign-in once. Use 'Refresh login session' to fix it.", "err");
+  }
+}
+
+async function runSetupCheck(options = {}) {
+  const autoAdvance = Boolean(options.autoAdvance);
+  const source = options.source || "manual";
+
+  setupStatusEl.textContent = source === "auto" ? "Checking saved login..." : "Running setup check...";
   setupTextEl.textContent = "";
   try {
     const url = form.querySelector("[name='url']")?.value || "";
@@ -299,13 +327,46 @@ async function runSetupCheck() {
       setupStatusEl.textContent = data.error || "Setup check failed.";
       return;
     }
-
-    setupStatusEl.textContent = data.ok
-      ? "Setup looks good for SimpleChat API mode."
-      : "Setup incomplete. Follow the checklist and retry.";
-    setupTextEl.textContent = (data.checks || []).map((c) => `${c.ok ? "[OK]" : "[FAIL]"} ${c.key}: ${c.message}`).join("\n");
+    applySetupCheckResult(data, { autoAdvance, source });
   } catch (err) {
     setupStatusEl.textContent = `Setup check failed: ${err.message}`;
+  }
+}
+
+async function refreshLoginSession() {
+  const url = form.querySelector("[name='url']")?.value || "";
+  const stateFile = form.querySelector("[name='stateFile']")?.value || ".auth/storage-state.json";
+  const networkTemplate = form.querySelector("[name='networkTemplate']")?.value || "outputs/network-log-ui-full.json";
+
+  setupStatusEl.textContent = "Opening browser for sign-in. Complete login and wait for capture...";
+  setupTextEl.textContent = "";
+  if (refreshAuthBtn) refreshAuthBtn.disabled = true;
+
+  try {
+    const res = await fetch("/api/refresh-auth", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        url,
+        stateFile,
+        networkTemplate,
+        timeoutSec: 300,
+      }),
+    });
+
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      setupStatusEl.textContent = data.error || "Login refresh failed.";
+      return;
+    }
+
+    setupStatusEl.textContent = data.message || "Login refresh complete.";
+    setupTextEl.textContent = data.details || "";
+    await runSetupCheck({ autoAdvance: true, source: "refresh" });
+  } catch (err) {
+    setupStatusEl.textContent = `Login refresh failed: ${err.message}`;
+  } finally {
+    if (refreshAuthBtn) refreshAuthBtn.disabled = false;
   }
 }
 
@@ -512,6 +573,7 @@ form.querySelectorAll("input[name='mode']").forEach((el) => {
 });
 showAdvancedModesEl?.addEventListener("change", updateModeVisibility);
 setupCheckBtn?.addEventListener("click", runSetupCheck);
+refreshAuthBtn?.addEventListener("click", refreshLoginSession);
 
 jsonlProfileEl?.addEventListener("change", updateProfileUI);
 jsonlProfileEl?.addEventListener("change", updateProfilePreview);
@@ -581,9 +643,18 @@ form.addEventListener("submit", async (ev) => {
   }
 });
 
-updateModeVisibility();
-showStep(0);
-hydrateDefaults();
-updateProfileUI();
-updateProfilePreview();
-refreshRunHistory();
+async function initializeWizard() {
+  updateModeVisibility();
+  showStep(0);
+  await hydrateDefaults();
+  updateProfileUI();
+  updateProfilePreview();
+  refreshRunHistory();
+
+  if (!hasAutoSetupRun) {
+    hasAutoSetupRun = true;
+    await runSetupCheck({ autoAdvance: true, source: "auto" });
+  }
+}
+
+initializeWizard();

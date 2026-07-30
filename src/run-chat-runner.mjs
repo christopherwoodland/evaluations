@@ -49,26 +49,42 @@ function resolveJsonlConfig(jsonlOptions) {
     contextKey: "context",
   };
 
+  const incoming = jsonlOptions || {};
+  const selectedProfile = incoming.profile || defaults.profile;
+
+  const profileDefaults =
+    selectedProfile === "foundry-context"
+      ? {
+          includeGroundTruth: true,
+          includeContext: true,
+          queryKey: "query",
+          responseKey: "response",
+          groundTruthKey: "ground_truth",
+          contextKey: "context",
+        }
+      : {
+          includeGroundTruth: true,
+          includeContext: false,
+          queryKey: "query",
+          responseKey: "response",
+          groundTruthKey: "ground_truth",
+          contextKey: "context",
+        };
+
   const opts = {
     ...defaults,
-    ...(jsonlOptions || {}),
+    profile: selectedProfile,
+    ...profileDefaults,
   };
 
-  if (opts.profile === "foundry-context") {
-    opts.includeGroundTruth = true;
-    opts.includeContext = true;
-    opts.queryKey = "query";
-    opts.responseKey = "response";
-    opts.groundTruthKey = "ground_truth";
-    opts.contextKey = "context";
-  } else if (opts.profile === "foundry-basic") {
-    opts.includeGroundTruth = true;
-    opts.includeContext = false;
-    opts.queryKey = "query";
-    opts.responseKey = "response";
-    opts.groundTruthKey = "ground_truth";
-    opts.contextKey = "context";
-  }
+  // Explicit user-supplied settings should win over profile presets.
+  if (incoming.includeGroundTruth !== undefined) opts.includeGroundTruth = Boolean(incoming.includeGroundTruth);
+  if (incoming.includeContext !== undefined) opts.includeContext = Boolean(incoming.includeContext);
+  if (incoming.includeMetadata !== undefined) opts.includeMetadata = Boolean(incoming.includeMetadata);
+  if (incoming.queryKey) opts.queryKey = String(incoming.queryKey);
+  if (incoming.responseKey) opts.responseKey = String(incoming.responseKey);
+  if (incoming.groundTruthKey) opts.groundTruthKey = String(incoming.groundTruthKey);
+  if (incoming.contextKey) opts.contextKey = String(incoming.contextKey);
 
   return opts;
 }
@@ -316,7 +332,16 @@ function writeOutputs({ results, outputDir, baseName, jsonlOptions, metadata }) 
 
   const opts = resolveJsonlConfig(jsonlOptions);
 
-  const ws = xlsx.utils.json_to_sheet(results);
+  const spreadsheetRows = results.map((r) => {
+    const out = { ...r };
+    const expected = out.response ?? "";
+    out.ground_truth = out.ground_truth ?? expected;
+    out.response = out.model_response ?? "";
+    delete out.model_response;
+    return out;
+  });
+
+  const ws = xlsx.utils.json_to_sheet(spreadsheetRows);
   const wb = xlsx.utils.book_new();
   xlsx.utils.book_append_sheet(wb, ws, "results");
 
@@ -362,9 +387,9 @@ function writeOutputs({ results, outputDir, baseName, jsonlOptions, metadata }) 
         base[opts.groundTruthKey] = r.response;
       }
 
-      // Emit optional context only when present and non-empty.
-      if (opts.includeContext && contextVal !== undefined && String(contextVal).trim() !== "") {
-        base[opts.contextKey] = String(contextVal);
+      // Emit context key whenever context output is enabled.
+      if (opts.includeContext) {
+        base[opts.contextKey] = contextVal === undefined ? "" : String(contextVal);
       }
 
       if (opts.includeMetadata) {
@@ -1142,6 +1167,8 @@ async function main() {
   let outputs;
   const runTimestamp = String(argv["run-timestamp"] || new Date().toISOString());
   const runId = String(argv["run-id"] || nowStamp());
+  const rawArgv = process.argv.slice(2);
+  const hasFlag = (name) => rawArgv.some((token) => token === `--${name}` || token.startsWith(`--${name}=`));
   const baseMetadata = {
     runId,
     timestamp: runTimestamp,
@@ -1152,9 +1179,9 @@ async function main() {
   };
   const jsonlOptions = {
     profile: String(argv["jsonl-profile"] || "foundry-basic"),
-    includeGroundTruth: Boolean(argv["include-ground-truth"]),
-    includeContext: Boolean(argv["include-context"]),
-    includeMetadata: Boolean(argv["include-metadata"]),
+    includeGroundTruth: hasFlag("include-ground-truth") ? Boolean(argv["include-ground-truth"]) : undefined,
+    includeContext: hasFlag("include-context") ? Boolean(argv["include-context"]) : undefined,
+    includeMetadata: hasFlag("include-metadata") ? Boolean(argv["include-metadata"]) : undefined,
     queryKey: String(argv["jsonl-query-key"] || "query"),
     responseKey: String(argv["jsonl-response-key"] || "response"),
     groundTruthKey: String(argv["jsonl-ground-truth-key"] || "ground_truth"),

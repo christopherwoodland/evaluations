@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import xlsx from "xlsx";
 import dotenv from "dotenv";
-import { request } from "playwright";
+import { request, chromium } from "playwright";
 
 dotenv.config();
 
@@ -148,6 +148,37 @@ app.post("/api/precheck", async (req, res) => {
 
     const ok = checks.every((c) => c.ok);
     return res.json({ ok, checks });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message || String(error) });
+  }
+});
+
+app.post("/api/refresh-auth", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const url = String(body.url || DEFAULT_CHAT_URL);
+    const stateFile = String(body.stateFile || DEFAULT_STATE_FILE);
+    const timeoutSec = Number(body.timeoutSec || 300);
+
+    const parsed = safeParseUrl(url);
+    if (!parsed.ok) {
+      return res.status(400).json({ ok: false, error: `Invalid chat URL: ${url}` });
+    }
+
+    const stateAbs = safeResolveWorkspacePath(stateFile);
+    ensureDir(path.dirname(stateAbs));
+
+    const refreshed = await refreshSimpleChatAuth({
+      url,
+      statePath: stateAbs,
+      timeoutMs: Math.max(30_000, timeoutSec * 1000),
+    });
+
+    if (!refreshed.ok) {
+      return res.status(500).json(refreshed);
+    }
+
+    return res.json(refreshed);
   } catch (error) {
     return res.status(500).json({ ok: false, error: error.message || String(error) });
   }
@@ -366,6 +397,10 @@ function ensureExampleTemplate() {
   const ws = xlsx.utils.json_to_sheet(rows);
   xlsx.utils.book_append_sheet(wb, ws, "input");
   xlsx.writeFile(wb, examplePath);
+}
+
+function ensureDir(dir) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
 function validateSpreadsheetUpload(filePath, originalName) {
@@ -741,6 +776,60 @@ async function checkSimpleChatAuth(url, statePath) {
       key: "savedAuth",
       ok: false,
       message: `Saved auth check failed: ${error.message || String(error)}`,
+    };
+  }
+}
+
+async function refreshSimpleChatAuth({ url, statePath, timeoutMs }) {
+  let browser;
+  let context;
+  try {
+    browser = await chromium.launch({ headless: false });
+    context = await browser.newContext(fs.existsSync(statePath) ? { storageState: statePath } : undefined);
+    const page = await context.newPage();
+
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+
+    const baseURL = new URL(url).origin;
+    const startedAt = Date.now();
+    let lastStatus = 0;
+
+    // Wait for user to complete login in the opened browser, then persist refreshed state.
+    while (Date.now() - startedAt < timeoutMs) {
+      try {
+        const authRes = await context.request.get(`${baseURL}/api/user/settings`, {
+          timeout: 8000,
+          failOnStatusCode: false,
+        });
+        lastStatus = authRes.status();
+        if (lastStatus === 200) {
+          await context.storageState({ path: statePath });
+          await browser.close();
+          return {
+            ok: true,
+            message: "Login refresh complete. Saved auth state is valid.",
+            details: `Saved state: ${toWorkspaceRelativePath(statePath)}\nAuth check status: 200`,
+          };
+        }
+      } catch {
+        // Keep waiting while user signs in.
+      }
+
+      await page.waitForTimeout(1500);
+    }
+
+    await browser.close();
+    return {
+      ok: false,
+      error: `Timed out waiting for login to complete. Last auth status: ${lastStatus || "unavailable"}.`,
+    };
+  } catch (error) {
+    if (browser) {
+      await browser.close().catch(() => {});
+    }
+    return {
+      ok: false,
+      error: `Refresh auth failed: ${error.message || String(error)}`,
     };
   }
 }
