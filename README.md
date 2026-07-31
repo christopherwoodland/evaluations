@@ -1,32 +1,32 @@
 ﻿# Simple Chat Prompt Runner
 
-This project runs prompt batches from spreadsheet input and exports:
+Batch-run prompts from CSV/XLSX input and export results to:
 
-- Excel results (`.xlsx`)
-- JSONL results (`.jsonl`)
+- Excel (`.xlsx`)
+- JSONL (`.jsonl`)
 
-It now includes two user interfaces:
+## UI options
+
+This project has two UI frontends, both using the same Node backend and runner:
 
 - Node web wizard (original UI)
-- Python Streamlit wizard (feature-parity UI in `python-ui/`)
+- Python Streamlit wizard (feature parity, in [python-ui/README.md](python-ui/README.md))
 
-## 1) Prerequisites
-
-Install required tools:
+## Prerequisites
 
 1. Node.js 18+
 2. Python 3.10+
 
-Install project dependencies from repo root:
+From repo root:
 
 ```bash
 npm install
 npx playwright install chromium
 ```
 
-## 2) Input file format
+## Input format
 
-Recommended input columns:
+Recommended columns:
 
 - `query`
 - `response`
@@ -34,82 +34,83 @@ Recommended input columns:
 
 Notes:
 
-- `response` is treated as the expected/reference answer column.
-- If you enable context in JSONL settings, `context` will be emitted in JSONL output.
+- `response` is treated as the expected answer.
+- If context inclusion is enabled in JSONL options, `context` is written into JSONL output.
 
 Templates:
 
-- CSV: [input.template.csv](input.template.csv)
-- Excel: [examples/input-template.xlsx](examples/input-template.xlsx)
+- [input.template.csv](input.template.csv)
+- [examples/input-template.xlsx](examples/input-template.xlsx)
 
-## 3) Option A: Run the Node Web Wizard
+## Run the Node web wizard
 
-Start wizard server from repo root:
-
-```bash
-npm run wizard
-```
-
-Open the URL printed in terminal (port auto-fallback is supported).
-
-## 4) Option B: Run the Python UI (feature parity)
-
-The Python UI is in [python-ui/README.md](python-ui/README.md).
-
-Quick start:
-
-1. Start backend first:
+From repo root:
 
 ```bash
 npm run wizard
 ```
 
-2. In a second terminal (repo root), start Python UI:
+Then open the URL printed in the terminal. The server supports port fallback when the default port is unavailable.
+
+## Run the Python Streamlit UI
+
+The Python UI is documented in detail at [python-ui/README.md](python-ui/README.md).
+
+Quick start from repo root:
+
+1. Start backend (required):
+
+```bash
+npm run wizard
+```
+
+2. In a second terminal, create/activate venv and install Python dependencies:
 
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r python-ui/requirements.txt
+```
+
+3. Start Streamlit UI:
+
+```bash
 streamlit run python-ui/app.py
 ```
 
-Windows one-command launcher:
+Windows helper script:
 
 ```powershell
 ./python-ui/start-python-ui.ps1
 ```
 
-NPM shortcuts from repo root:
+NPM shortcuts:
 
 ```bash
 npm run python-ui
-```
-
-```bash
 npm run python-ui:setup
 ```
 
-3. In the Python UI sidebar:
+In the sidebar, set the backend URL or use Auto-detect.
 
-- Set backend URL, or click `Auto-detect`.
-- Run setup and then run batches.
-
-## 5) Modes
+## Run modes
 
 - `simplechat-api`: preferred for normal batch runs
 - `ui`: browser automation mode
 - `api`: generic HTTP endpoint mode
 
-## 6) Output and metadata
+## Outputs and metadata
 
 Outputs are written to `outputs/` by default.
 
-Excel exports include:
+Excel output includes:
 
-- `results` sheet with response and per-row status/timing fields
-- `run_metadata` sheet with run-level metadata (mode, model, timestamps, duration, and mode-specific details)
+- `results` sheet: row-level results and status/timing
+- `run_metadata` sheet: run-level data such as mode, model info, timestamps, duration, and backend/runtime details
 
-## 7) Smoke tests
+JSONL output includes one object per row with response plus optional fields based on run options (for example context/meta/ground_truth).
+
+## Smoke tests
 
 ```bash
 npm run smoke
@@ -117,7 +118,71 @@ npm run smoke:api
 npm run smoke:all
 ```
 
-## 8) Environment variables
+## Troubleshooting
+
+### Port already in use
+
+If `npm run wizard` fails because a port is already bound:
+
+1. Find the process using the port (PowerShell):
+
+```powershell
+Get-NetTCPConnection -LocalPort 5088 -ErrorAction SilentlyContinue | Select-Object LocalAddress,LocalPort,State,OwningProcess
+```
+
+2. If safe, stop that process:
+
+```powershell
+Stop-Process -Id <PID> -Force
+```
+
+3. Start the wizard again:
+
+```bash
+npm run wizard
+```
+
+The backend also supports port fallback when the default port is unavailable.
+
+### Python UI cannot connect to backend
+
+In Streamlit:
+
+1. Open the sidebar backend section.
+2. Click `Auto-detect backend`.
+3. Click `Health check backend`.
+
+If detection picks the wrong instance, manually set the backend URL to the active wizard URL shown by `npm run wizard`.
+
+### Different behavior between UIs
+
+Both UIs use the same backend and runner. If behavior differs, the most common cause is each UI pointing to a different backend instance/port.
+
+Verify both UIs are targeting the same backend URL, then rerun.
+
+### UI mode run fails (`--mode ui`)
+
+Common causes:
+
+- Missing Playwright browser install
+- Expired/missing auth state file
+- Selectors/network template mismatch for the target chat page
+
+Suggested checks:
+
+```bash
+npx playwright install chromium
+```
+
+Refresh auth from either UI setup flow, then retry the run.
+
+### Metadata/model fields look incomplete
+
+Model name availability depends on what the backend endpoints expose at runtime.
+
+If the friendly name is unavailable, outputs can still include model identifiers/source/confidence metadata. This is expected and indicates fallback resolution was used.
+
+## Environment variables
 
 Create `.env` from `.env.example` and set values as needed:
 
@@ -129,7 +194,7 @@ Create `.env` from `.env.example` and set values as needed:
 - `API_RESPONSE_PATH`
 - `OUTPUT_DIR`
 
-## 9) Open source policy files
+## Open source policy files
 
 - [LICENSE](LICENSE)
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
