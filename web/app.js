@@ -4,6 +4,7 @@ const stepEls = [...document.querySelectorAll(".step")];
 const prevBtn = document.getElementById("prevBtn");
 const nextBtn = document.getElementById("nextBtn");
 const runBtn = document.getElementById("runBtn");
+const rerunBtn = document.getElementById("rerunBtn");
 const statusEl = document.getElementById("status");
 const logsEl = document.getElementById("logs");
 const modelUsedEl = document.getElementById("modelUsed");
@@ -24,7 +25,10 @@ const clearHistoryBtn = document.getElementById("clearHistoryBtn");
 const historyListEl = document.getElementById("historyList");
 const showAdvancedModesEl = document.getElementById("showAdvancedModes");
 const setupOpenChatEl = document.getElementById("setupOpenChat");
+const refreshAuthBtn = document.getElementById("refreshAuthBtn");
 const setupCheckBtn = document.getElementById("setupCheckBtn");
+const manualRequestTextEl = document.getElementById("manualRequestText");
+const importRequestBtn = document.getElementById("importRequestBtn");
 const setupStatusEl = document.getElementById("setupStatus");
 const setupTextEl = document.getElementById("setupText");
 const precheckBtn = document.getElementById("precheckBtn");
@@ -37,6 +41,7 @@ const foundryStatusEl = document.getElementById("foundryStatus");
 let step = 1;
 let latestJsonlHref = "";
 const MAX_STEP = 4;
+let hasAutoSetupRun = false;
 
 function boolFromValue(value, fallback = false) {
   if (value == null) return fallback;
@@ -172,6 +177,7 @@ function updateProfilePreview() {
   profilePreviewTextEl.textContent = JSON.stringify(sample, null, 2);
 }
 
+
 function maskSensitiveText(text) {
   if (!text) return "";
   let masked = String(text);
@@ -273,8 +279,34 @@ function buildPrecheckPayload() {
   };
 }
 
-async function runSetupCheck() {
-  setupStatusEl.textContent = "Running setup check...";
+function renderChecks(checks) {
+  return (checks || []).map((c) => `${c.ok ? "[OK]" : "[FAIL]"} ${c.key}: ${c.message}`).join("\n");
+}
+
+function applySetupCheckResult(data, options = {}) {
+  const autoAdvance = Boolean(options.autoAdvance);
+  const source = options.source || "manual";
+
+  setupStatusEl.textContent = data.ok
+    ? "Setup looks good for SimpleChat API mode."
+    : "Setup incomplete. Follow the checklist and retry.";
+  setupTextEl.textContent = renderChecks(data.checks || []);
+
+  if (data.ok && autoAdvance && step === 0) {
+    showStep(1);
+    setStatus("Saved login is valid. Step 0 completed automatically.", "ok");
+  }
+
+  if (!data.ok && source === "auto") {
+    setStatus("Step 0 needs sign-in once. Use 'Refresh login session' to fix it.", "err");
+  }
+}
+
+async function runSetupCheck(options = {}) {
+  const autoAdvance = Boolean(options.autoAdvance);
+  const source = options.source || "manual";
+
+  setupStatusEl.textContent = source === "auto" ? "Checking saved login..." : "Running setup check...";
   setupTextEl.textContent = "";
   try {
     const url = form.querySelector("[name='url']")?.value || "";
@@ -297,13 +329,81 @@ async function runSetupCheck() {
       setupStatusEl.textContent = data.error || "Setup check failed.";
       return;
     }
-
-    setupStatusEl.textContent = data.ok
-      ? "Setup looks good for SimpleChat API mode."
-      : "Setup incomplete. Follow the checklist and retry.";
-    setupTextEl.textContent = (data.checks || []).map((c) => `${c.ok ? "[OK]" : "[FAIL]"} ${c.key}: ${c.message}`).join("\n");
+    applySetupCheckResult(data, { autoAdvance, source });
   } catch (err) {
     setupStatusEl.textContent = `Setup check failed: ${err.message}`;
+  }
+}
+
+async function refreshLoginSession() {
+  const url = form.querySelector("[name='url']")?.value || "";
+  const stateFile = form.querySelector("[name='stateFile']")?.value || ".auth/storage-state.json";
+  const networkTemplate = form.querySelector("[name='networkTemplate']")?.value || "outputs/network-log-ui-full.json";
+
+  setupStatusEl.textContent = "Opening browser for sign-in. Complete login and wait for capture...";
+  setupTextEl.textContent = "";
+  if (refreshAuthBtn) refreshAuthBtn.disabled = true;
+
+  try {
+    const res = await fetch("/api/refresh-auth", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        url,
+        stateFile,
+        networkTemplate,
+        timeoutSec: 300,
+      }),
+    });
+
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      setupStatusEl.textContent = data.error || "Login refresh failed.";
+      return;
+    }
+
+    setupStatusEl.textContent = data.message || "Login refresh complete.";
+    setupTextEl.textContent = data.details || "";
+    await runSetupCheck({ autoAdvance: true, source: "refresh" });
+  } catch (err) {
+    setupStatusEl.textContent = `Login refresh failed: ${err.message}`;
+  } finally {
+    if (refreshAuthBtn) refreshAuthBtn.disabled = false;
+  }
+}
+
+async function importManualRequest() {
+  const requestText = manualRequestTextEl?.value || "";
+  const url = form.querySelector("[name='url']")?.value || "";
+  const networkTemplate = form.querySelector("[name='networkTemplate']")?.value || "outputs/network-log-ui-full.json";
+  if (!requestText.trim()) {
+    setupStatusEl.textContent = "Paste a copied PowerShell request first.";
+    return;
+  }
+
+  setupStatusEl.textContent = "Extracting request template...";
+  setupTextEl.textContent = "";
+  if (importRequestBtn) importRequestBtn.disabled = true;
+
+  try {
+    const res = await fetch("/api/import-network-template", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requestText, networkTemplate, url }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      setupStatusEl.textContent = data.error || "Could not create the network template.";
+      return;
+    }
+
+    manualRequestTextEl.value = "";
+    setupStatusEl.textContent = data.message;
+    await runSetupCheck({ source: "manual-import" });
+  } catch (err) {
+    setupStatusEl.textContent = `Request import failed: ${err.message}`;
+  } finally {
+    if (importRequestBtn) importRequestBtn.disabled = false;
   }
 }
 
@@ -448,6 +548,42 @@ async function clearRunHistory() {
   }
 }
 
+async function rerunLastConfig() {
+  setStatus("Rerunning last saved configuration...", "");
+  logsEl.textContent = "";
+  setRunContext(null);
+  setDownloads(null);
+  runBtn.disabled = true;
+  if (rerunBtn) rerunBtn.disabled = true;
+
+  try {
+    const res = await fetch("/api/rerun", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const data = await res.json();
+    const outputText = [data.command || "", data.stdout || "", data.stderr || ""].filter(Boolean).join("\n\n");
+    logsEl.textContent = outputText;
+
+    if (!res.ok || !data.ok) {
+      setStatus(data.error || `Rerun failed (exit ${data.exitCode ?? "n/a"}).`, "err");
+      return;
+    }
+
+    setStatus("Rerun complete.", "ok");
+    setDownloads(data.outputs || {});
+    setRunContext(data.runContext || null);
+    await previewLatestJsonl();
+    await refreshRunHistory();
+  } catch (err) {
+    setStatus(`Rerun failed: ${err.message}`, "err");
+  } finally {
+    runBtn.disabled = false;
+    if (rerunBtn) rerunBtn.disabled = false;
+  }
+}
+
 function validateCurrentStep() {
   if (step === 0) {
     setStatus("Continue to mode selection once setup is ready.");
@@ -474,6 +610,8 @@ form.querySelectorAll("input[name='mode']").forEach((el) => {
 });
 showAdvancedModesEl?.addEventListener("change", updateModeVisibility);
 setupCheckBtn?.addEventListener("click", runSetupCheck);
+refreshAuthBtn?.addEventListener("click", refreshLoginSession);
+importRequestBtn?.addEventListener("click", importManualRequest);
 
 jsonlProfileEl?.addEventListener("change", updateProfileUI);
 jsonlProfileEl?.addEventListener("change", updateProfilePreview);
@@ -482,6 +620,7 @@ refreshHistoryBtn?.addEventListener("click", refreshRunHistory);
 clearHistoryBtn?.addEventListener("click", clearRunHistory);
 precheckBtn?.addEventListener("click", runPrecheck);
 exportFoundryBtn?.addEventListener("click", exportLatestToFoundry);
+rerunBtn?.addEventListener("click", rerunLastConfig);
 
 ["includeGroundTruth", "includeContext", "includeMetadata", "jsonlQueryKey", "jsonlResponseKey", "jsonlGroundTruthKey", "jsonlContextKey"].forEach((name) => {
   const el = form.querySelector(`[name='${name}']`);
@@ -504,7 +643,7 @@ form.addEventListener("submit", async (ev) => {
   fd.set("includeContext", includeContext ? "true" : "false");
   fd.set("includeMetadata", includeMetadata ? "true" : "false");
   fd.set("strictSchema", strictSchema ? "true" : "false");
-  setStatus("Running evaluation. This may take a while...", "");
+  setStatus("Running. This may take a while...", "");
   logsEl.textContent = "";
   setRunContext(null);
   setDownloads(null);
@@ -542,9 +681,18 @@ form.addEventListener("submit", async (ev) => {
   }
 });
 
-updateModeVisibility();
-showStep(0);
-hydrateDefaults();
-updateProfileUI();
-updateProfilePreview();
-refreshRunHistory();
+async function initializeWizard() {
+  updateModeVisibility();
+  showStep(0);
+  await hydrateDefaults();
+  updateProfileUI();
+  updateProfilePreview();
+  refreshRunHistory();
+
+  if (!hasAutoSetupRun) {
+    hasAutoSetupRun = true;
+    await runSetupCheck({ autoAdvance: true, source: "auto" });
+  }
+}
+
+initializeWizard();

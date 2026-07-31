@@ -1,248 +1,202 @@
-# Simple Chat Evaluation Runner
+﻿# Simple Chat Prompt Runner
 
-This process reads prompts from a spreadsheet, runs each prompt through the Simple Chat UI (Playwright) or a direct API endpoint, captures responses, and writes:
+Batch-run prompts from CSV/XLSX input and export results to:
 
-- Excel results file (`.xlsx`)
-- JSONL results file (`.jsonl`)
+- Excel (`.xlsx`)
+- JSONL (`.jsonl`)
 
-The outputs are suitable for downstream evaluation workflows (including Foundry evaluation datasets).
+## UI options
 
-## What it does
+This project has two UI frontends, both using the same Node backend and runner:
 
-1. Reads input rows from `.xlsx` or `.csv`
-2. Looks for columns:
-   - Query column (default: `query`)
-   - Reference answer column (default: `reference_answer`)
-3. Sends each query to:
-   - UI mode: browser automation against chat UI
-   - API mode: HTTP call to your endpoint
-   - SimpleChat API mode: direct call to this app's internal chat streaming API using your saved login state
-4. Stores response + status per row
-5. Exports outputs under `outputs/`
+- Node web wizard (original UI)
+- Python Streamlit wizard (feature parity, in [python-ui/README.md](python-ui/README.md))
 
-## Setup
+## Prerequisites
+
+1. Node.js 18+
+2. Python 3.10+
+
+From repo root:
 
 ```bash
 npm install
 npx playwright install chromium
 ```
 
-## Environment config (.env)
+## Input format
 
-Yes. You can control URLs and defaults with a `.env` file.
+Recommended columns:
 
-Create `.env` from `.env.example`:
+- `query`
+- `response`
+- `context` (optional)
 
-```bash
-copy .env.example .env
-```
+Notes:
 
-Key variables:
+- `response` is treated as the expected answer.
+- If context inclusion is enabled in JSONL options, `context` is written into JSONL output.
 
-- `CHAT_URL` default chat UI URL (used by UI and SimpleChat API modes)
-- `API_URL` default endpoint for Generic API mode
-- `STATE_FILE` auth storage state path
-- `NETWORK_TEMPLATE` default SimpleChat template log path
-- `OUTPUT_DIR` output folder
-- `API_METHOD`, `API_RESPONSE_PATH` generic API behavior
-- `INCLUDE_GROUND_TRUTH`, `INCLUDE_CONTEXT`, `INCLUDE_METADATA` JSONL schema toggles
-- `MASK_LOGS` mask sensitive-looking values in wizard log output (default `true`)
+Templates:
 
-CLI flags always override `.env` values.
+- [input.template.csv](input.template.csv)
+- [examples/input-template.xlsx](examples/input-template.xlsx)
 
-## Wizard UI (new)
+## Run the Node web wizard
 
-Launch the local wizard app:
+From repo root:
 
 ```bash
 npm run wizard
 ```
 
-Then open:
+Then open the URL printed in the terminal. The server supports port fallback when the default port is unavailable.
 
-```text
-http://localhost:5088
+## Run the Python Streamlit UI
+
+The Python UI is documented in detail at [python-ui/README.md](python-ui/README.md).
+
+Quick start from repo root:
+
+1. Start backend (required):
+
+```bash
+npm run wizard
 ```
 
-If that port is unavailable, the server automatically falls back (for example to `http://127.0.0.1:5173`) and prints the exact URL in terminal output.
+2. In a second terminal, create/activate venv and install Python dependencies:
 
-Wizard flow:
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r python-ui/requirements.txt
+```
 
-0. Complete one-time setup (open chat app, sign in, send one manual message, run readiness check)
-1. Pick mode (`simplechat-api`, `ui`, or `api`)
-2. Upload spreadsheet (and optional helper files)
-3. Configure columns/options
-4. Run and download artifacts
+3. Start Streamlit UI:
 
-The wizard produces the same outputs under `outputs/` and gives direct download links.
+```bash
+streamlit run python-ui/app.py
+```
 
-New wizard features:
+Windows helper script:
 
-- SimpleChat API is the default mode; advanced modes can be toggled on
-- JSONL export profiles (`Foundry Basic`, `Foundry + Context`, `Custom`)
-- Custom JSONL key mapping fields
-- Export profile preview panel (shows sample JSONL line before run)
-- Strict schema mode (fail fast on missing/blank required values)
-- Connectivity precheck before run
-- JSONL preview + validation after each run
-- Recent run history with one-click artifact download links
-- Run history clear action with confirmation
-- One-click copy of latest JSONL to a Foundry export folder
-- Optional log masking toggle in the wizard
+```powershell
+./python-ui/start-python-ui.ps1
+```
 
-## Quick smoke test
+NPM shortcuts:
 
-Run one end-to-end sample in `simplechat-api` mode and validate required JSONL keys:
+```bash
+npm run python-ui
+npm run python-ui:setup
+```
+
+In the sidebar, set the backend URL or use Auto-detect.
+
+## Run modes
+
+- `simplechat-api`: preferred for normal batch runs
+- `ui`: browser automation mode
+- `api`: generic HTTP endpoint mode
+
+## Outputs and metadata
+
+Outputs are written to `outputs/` by default.
+
+Excel output includes:
+
+- `results` sheet: row-level results and status/timing
+- `run_metadata` sheet: run-level data such as mode, model info, timestamps, duration, and backend/runtime details
+
+JSONL output includes one object per row with response plus optional fields based on run options (for example context/meta/ground_truth).
+
+## Smoke tests
 
 ```bash
 npm run smoke
-```
-
-Prerequisites for this smoke check:
-
-- `.auth/storage-state.json` exists
-- `outputs/network-log-ui-full.json` exists
-
-Run a deterministic `api` mode smoke test using a local mock endpoint:
-
-```bash
 npm run smoke:api
-```
-
-Run both smoke suites:
-
-```bash
 npm run smoke:all
 ```
 
-## Input format
-
-Use headers similar to:
-
-- `query`
-- `reference_answer`
-
-You can start with:
-
-- `input.template.csv`
-
-## Run in UI mode (Playwright)
-
-```bash
-npm run run -- --mode ui --input ./input.template.csv
-```
-
-Useful options:
-
-- `--url` chat URL (default is your provided Simple Chat URL)
-- `--headed true|false` (default `true`; first run should be `true` for login)
-- `--selectors ./selectors.example.json` for custom DOM selectors
-- `--state-file ./.auth/storage-state.json` to persist login
-- `--new-chat true` to click new chat each row
-- `--timeout-ms 45000` response wait timeout
-
-### Authentication note
-
-The target site redirects to Microsoft sign-in. On first run in UI mode:
-
-1. Browser opens
-2. Sign in manually
-3. Press Enter in terminal
-
-Auth state is then saved so later runs can be unattended.
-
-## Run in API mode
-
-```bash
-npm run run -- \
-  --mode api \
-  --input ./input.template.csv \
-  --api-url "https://your-endpoint/chat" \
-  --api-method POST \
-  --api-headers '{"Authorization":"Bearer YOUR_TOKEN"}' \
-  --api-body-template '{"messages":[{"role":"user","content":"{{query}}"}]}' \
-  --api-response-path "choices.0.message.content"
-```
-
-## Run in SimpleChat direct API mode (recommended for this app)
-
-This uses:
-
-- your saved auth from `--state-file` (generated by one UI login run)
-- payload template extracted from a captured UI network log
-
-Step 1: capture one network log (if you have not already)
-
-```bash
-node src/run-chat-eval.mjs --mode ui --input ./input.template.csv --headed true --debug-network true --network-log ./outputs/network-log-ui.json
-```
-
-Step 2: run direct API batch
-
-```bash
-node src/run-chat-eval.mjs --mode simplechat-api --input ./input.template.csv --network-template ./outputs/network-log-ui.json
-```
-
-This mode avoids brittle DOM selectors and is better for large evaluation runs.
-
 ## Troubleshooting
 
-UI mode can still be less reliable than direct API mode because it depends on page DOM behavior.
+### Port already in use
 
-If UI mode times out:
+If `npm run wizard` fails because a port is already bound:
 
-1. Re-run with `--headed true` and confirm login is valid
-2. Refresh auth state by completing sign-in once and letting state be saved
-3. Verify selectors file values for your current UI version
-4. Prefer `simplechat-api` mode for larger evaluation batches
+1. Find the process using the port (PowerShell):
 
-If logs are too redacted for debugging:
+```powershell
+Get-NetTCPConnection -LocalPort 5088 -ErrorAction SilentlyContinue | Select-Object LocalAddress,LocalPort,State,OwningProcess
+```
 
-1. In wizard step 3, uncheck `Mask sensitive values in run logs`
-2. Or set `MASK_LOGS=false` in `.env`
+2. If safe, stop that process:
 
-## Output schema
+```powershell
+Stop-Process -Id <PID> -Force
+```
 
-Each result row includes:
+3. Start the wizard again:
 
-- original input columns
-- `query`
-- `reference_answer`
-- `model_response`
-- `status` (`ok` / `error` / `skipped`)
-- `error`
-- `captured_at_utc`
+```bash
+npm run wizard
+```
 
-JSONL rows use:
+The backend also supports port fallback when the default port is unavailable.
 
-- `query`
-- `response`
-- `ground_truth`
-- optional `context`
+### Python UI cannot connect to backend
 
-JSONL flags:
+In Streamlit:
 
-- `--include-ground-truth true|false` (default: `true`)
-- `--include-context true|false` (default: `false`)
-- `--include-metadata true|false` (default: `false`; adds `meta` object with status/error/timestamp)
-- `--strict-schema true|false` (default: `false`)
-- `--jsonl-profile foundry-basic|foundry-context|custom` (default: `foundry-basic`)
-- `--jsonl-query-key <name>` (custom profile)
-- `--jsonl-response-key <name>` (custom profile)
-- `--jsonl-ground-truth-key <name>` (custom profile)
-- `--jsonl-context-key <name>` (custom profile)
+1. Open the sidebar backend section.
+2. Click `Auto-detect backend`.
+3. Click `Health check backend`.
 
-## Foundry evaluation handoff
+If detection picks the wrong instance, manually set the backend URL to the active wizard URL shown by `npm run wizard`.
 
-The generated JSONL is evaluation-ready in structure. If your Foundry evaluator expects a different field map, transform keys (for example `query -> input`, `response -> output`, `reference_answer -> ground_truth`) before upload.
+### Different behavior between UIs
 
-You can also use the wizard's Foundry export helper to copy the latest JSONL to `FOUNDRY_EXPORT_DIR`.
+Both UIs use the same backend and runner. If behavior differs, the most common cause is each UI pointing to a different backend instance/port.
 
-## Open source standards
+Verify both UIs are targeting the same backend URL, then rerun.
 
-This repository includes baseline open source policy files:
+### UI mode run fails (`--mode ui`)
 
-- `LICENSE`
-- `CODE_OF_CONDUCT.md`
-- `CONTRIBUTING.md`
-- `SECURITY.md`
+Common causes:
+
+- Missing Playwright browser install
+- Expired/missing auth state file
+- Selectors/network template mismatch for the target chat page
+
+Suggested checks:
+
+```bash
+npx playwright install chromium
+```
+
+Refresh auth from either UI setup flow, then retry the run.
+
+### Metadata/model fields look incomplete
+
+Model name availability depends on what the backend endpoints expose at runtime.
+
+If the friendly name is unavailable, outputs can still include model identifiers/source/confidence metadata. This is expected and indicates fallback resolution was used.
+
+## Environment variables
+
+Create `.env` from `.env.example` and set values as needed:
+
+- `CHAT_URL`
+- `STATE_FILE`
+- `NETWORK_TEMPLATE`
+- `API_URL`
+- `API_METHOD`
+- `API_RESPONSE_PATH`
+- `OUTPUT_DIR`
+
+## Open source policy files
+
+- [LICENSE](LICENSE)
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [SECURITY.md](SECURITY.md)

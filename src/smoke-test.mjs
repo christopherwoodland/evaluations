@@ -75,7 +75,7 @@ async function main() {
   }
 
   const args = [
-    "src/run-chat-eval.mjs",
+    "src/run-chat-runner.mjs",
     "--mode",
     "simplechat-api",
     "--input",

@@ -1,3 +1,3 @@
-query,reference_answer
+query,response
 What is the capital of France?,Paris
 Explain what REST APIs are in one sentence.,REST APIs are interfaces that expose resources over HTTP methods.

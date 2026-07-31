@@ -119,7 +119,7 @@ async function main() {
   const mock = await startMockServer();
   try {
     const args = [
-      "src/run-chat-eval.mjs",
+      "src/run-chat-runner.mjs",
       "--mode",
       "api",
       "--input",
