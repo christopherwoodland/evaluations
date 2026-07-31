@@ -216,6 +216,26 @@ div[data-testid="stLinkButton"] button {
     transition: transform 180ms ease, box-shadow 180ms ease;
 }
 
+/* Ensure Streamlit form submit buttons (e.g., Create network template) are readable across themes/versions. */
+div[data-testid="stFormSubmitButton"] > button,
+div.stFormSubmitButton > button,
+button[kind="secondaryFormSubmit"],
+button[kind="primaryFormSubmit"] {
+    color: var(--text) !important;
+    background: #1b2835 !important;
+    border: 1px solid #355066 !important;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+}
+
+div[data-testid="stFormSubmitButton"] > button:hover,
+div.stFormSubmitButton > button:hover,
+button[kind="secondaryFormSubmit"]:hover,
+button[kind="primaryFormSubmit"]:hover {
+    color: var(--text) !important;
+    background: #223244 !important;
+    border: 1px solid #4b6f8b !important;
+}
+
 div[data-testid="stButton"] > button:hover,
 div[data-testid="stFormSubmitButton"] > button:hover,
 div[data-testid="stDownloadButton"] > button:hover,
@@ -257,10 +277,13 @@ div[data-testid="stDownloadButton"] > button[kind="secondary"]:hover {
 
 div[data-testid="stButton"] > button:disabled,
 div[data-testid="stFormSubmitButton"] > button:disabled,
+div.stFormSubmitButton > button:disabled,
+button[kind="secondaryFormSubmit"]:disabled,
+button[kind="primaryFormSubmit"]:disabled,
 div[data-testid="stDownloadButton"] > button:disabled {
-    color: #9fb0bd;
-    background: #24313d;
-    border: 1px solid #324454;
+    color: #d7e3eb !important;
+    background: #334554 !important;
+    border: 1px solid #4b6275 !important;
     opacity: 1;
     cursor: not-allowed;
     box-shadow: none;
