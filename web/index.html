@@ -47,6 +47,16 @@
                 <button id="setupCheckBtn" type="button" class="ghost">Check setup readiness</button>
               </div>
 
+              <details class="manual-template">
+                <summary>Import a copied request manually</summary>
+                <label class="field">
+                  <span>Paste `fetch(...)`, `Invoke-WebRequest`, or raw JSON body</span>
+                  <textarea id="manualRequestText" rows="7" placeholder="Paste fetch(...), Invoke-WebRequest, or raw JSON body"></textarea>
+                  <small>Only the /api/chat/stream URL and JSON body are saved. Cookies and headers are discarded.</small>
+                </label>
+                <button id="importRequestBtn" type="button" class="ghost">Create network template</button>
+              </details>
+
               <div id="setupStatus" class="preview-status">Setup check has not been run yet.</div>
               <pre id="setupText" class="logs small"></pre>
             </div>

@@ -167,6 +167,24 @@ h2 {
   margin: 0.25rem 0;
 }
 
+.manual-template {
+  margin: 0.9rem 0;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--line);
+}
+
+.manual-template summary {
+  margin-bottom: 0.7rem;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.manual-template textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: Consolas, monospace;
+}
+
 .mode-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

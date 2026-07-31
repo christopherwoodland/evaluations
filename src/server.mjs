@@ -81,6 +81,7 @@ app.get("/api/files/defaults", (_, res) => {
     defaultStrictSchema: process.env.STRICT_SCHEMA || "false",
     defaultFoundryExportDir: DEFAULT_FOUNDRY_EXPORT_DIR,
     defaultMaskLogs: DEFAULT_MASK_LOGS,
+    capabilities: ["manual-network-template-import"],
     runnerEntrypoint: RUNNER_ENTRYPOINT,
   });
 });
@@ -184,6 +185,27 @@ app.post("/api/refresh-auth", async (req, res) => {
     return res.json(refreshed);
   } catch (error) {
     return res.status(500).json({ ok: false, error: error.message || String(error) });
+  }
+});
+
+app.post("/api/import-network-template", (req, res) => {
+  try {
+    const body = req.body || {};
+    const requestText = String(body.requestText || "");
+    const networkTemplate = String(body.networkTemplate || DEFAULT_NETWORK_TEMPLATE);
+    const fallbackUrl = String(body.url || DEFAULT_CHAT_URL);
+    const captured = parseManualChatRequest(requestText, fallbackUrl);
+    const templateAbs = safeResolveWorkspacePath(networkTemplate);
+
+    ensureDir(path.dirname(templateAbs));
+    fs.writeFileSync(templateAbs, JSON.stringify([captured], null, 2), "utf8");
+
+    return res.json({
+      ok: true,
+      message: `Network template created: ${networkTemplate}`,
+    });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message || String(error) });
   }
 });
 
@@ -790,6 +812,153 @@ async function checkSimpleChatAuth(url, statePath) {
       message: `Saved auth check failed: ${error.message || String(error)}`,
     };
   }
+}
+
+function parseManualChatRequest(requestText, fallbackChatUrl = DEFAULT_CHAT_URL) {
+  if (!requestText.trim()) {
+    throw new Error("The copied request is empty.");
+  }
+
+  const input = requestText.trim();
+  if (input.startsWith("fetch(")) {
+    return parseFetchChatRequest(input);
+  }
+  if (input.startsWith("{")) {
+    return parseRawJsonChatBody(input, fallbackChatUrl);
+  }
+
+  return parsePowerShellChatRequest(input);
+}
+
+function parsePowerShellChatRequest(requestText) {
+  const uriMatch = requestText.match(/-Uri\s+["']([^"']+)["']/i);
+  if (!uriMatch) {
+    throw new Error("Could not find a quoted -Uri value in the PowerShell request.");
+  }
+
+  const url = uriMatch[1];
+  validateChatStreamUrl(url);
+
+  const bodyMatch = requestText.match(/-Body\s+"((?:`.|[^"])*)"/is);
+  if (!bodyMatch) {
+    throw new Error("Could not find a double-quoted -Body value in the PowerShell request.");
+  }
+
+  const bodyText = bodyMatch[1]
+    .replace(/`"/g, '"')
+    .replace(/``/g, "`")
+    .replace(/`r/g, "\r")
+    .replace(/`n/g, "\n")
+    .replace(/`t/g, "\t");
+
+  let payload;
+  try {
+    payload = JSON.parse(bodyText);
+  } catch {
+    throw new Error("The copied -Body value is not valid JSON after PowerShell escaping is removed.");
+  }
+
+  return buildCapturedTemplateEvent(url, payload);
+}
+
+function parseFetchChatRequest(fetchText) {
+  const match = fetchText.match(/fetch\(\s*["']([^"']+)["']\s*,\s*(\{[\s\S]*\})\s*\)\s*;?\s*$/i);
+  if (!match) {
+    throw new Error("Could not parse fetch(...) format. Paste the full fetch call.");
+  }
+
+  const url = String(match[1] || "").trim();
+  validateChatStreamUrl(url);
+
+  let options;
+  try {
+    options = JSON.parse(match[2]);
+  } catch {
+    throw new Error("The fetch options object is not valid JSON.");
+  }
+
+  const method = String(options?.method || "POST").toUpperCase();
+  if (method !== "POST") {
+    throw new Error(`Expected POST method for chat stream request, received '${method}'.`);
+  }
+
+  const rawBody = options?.body;
+  if (rawBody == null || rawBody === "") {
+    throw new Error("The fetch call does not contain a body.");
+  }
+
+  let payload;
+  if (typeof rawBody === "string") {
+    try {
+      payload = JSON.parse(rawBody);
+    } catch {
+      throw new Error("The fetch body string is not valid JSON.");
+    }
+  } else if (typeof rawBody === "object") {
+    payload = rawBody;
+  } else {
+    throw new Error("The fetch body must be JSON text or an object.");
+  }
+
+  return buildCapturedTemplateEvent(url, payload);
+}
+
+function parseRawJsonChatBody(bodyText, fallbackChatUrl) {
+  let payload;
+  try {
+    payload = JSON.parse(bodyText);
+  } catch {
+    throw new Error("Raw JSON input is not valid JSON.");
+  }
+
+  const base = safeParseUrl(String(fallbackChatUrl || "")).ok
+    ? new URL(String(fallbackChatUrl)).origin
+    : new URL(DEFAULT_CHAT_URL).origin;
+  const url = `${base}/api/chat/stream`;
+  return buildCapturedTemplateEvent(url, payload);
+}
+
+function validateChatStreamUrl(url) {
+  const parsedUrl = safeParseUrl(url);
+  if (!parsedUrl.ok || !String(url).includes("/api/chat/stream")) {
+    throw new Error("The request URI must target /api/chat/stream.");
+  }
+}
+
+function buildCapturedTemplateEvent(url, payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("Request body JSON must be an object.");
+  }
+
+  const sanitizedPayload = sanitizeManualTemplate(payload);
+  return {
+    ts: new Date().toISOString(),
+    kind: "request",
+    method: "POST",
+    url,
+    resourceType: "fetch",
+    postData: JSON.stringify(sanitizedPayload),
+  };
+}
+
+function sanitizeManualTemplate(value) {
+  const statefulKeys = new Set([
+    "conversation", "conversation_id", "conversationid", "thread", "thread_id", "threadid",
+    "session", "session_id", "sessionid", "history", "chat_history", "message_history",
+    "past_messages", "messages", "user_messages", "assistant_messages", "context_messages",
+    "parent_message_id", "parentmessageid", "message_id", "messageid", "request_id", "requestid",
+  ]);
+
+  if (Array.isArray(value)) return value.map((item) => sanitizeManualTemplate(item));
+  if (!value || typeof value !== "object") return value;
+
+  const sanitized = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (!statefulKeys.has(key.toLowerCase())) {
+      sanitized[key] = sanitizeManualTemplate(child);
+    }
+  }
+  return sanitized;
 }
 
 async function refreshSimpleChatAuth({ url, statePath, timeoutMs }) {

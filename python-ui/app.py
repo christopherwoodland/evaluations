@@ -208,6 +208,7 @@ div[data-testid="stRadio"] label {
 }
 
 div[data-testid="stButton"] > button,
+div[data-testid="stFormSubmitButton"] > button,
 div[data-testid="stDownloadButton"] > button,
 div[data-testid="stLinkButton"] a,
 div[data-testid="stLinkButton"] button {
@@ -216,26 +217,30 @@ div[data-testid="stLinkButton"] button {
 }
 
 div[data-testid="stButton"] > button:hover,
+div[data-testid="stFormSubmitButton"] > button:hover,
 div[data-testid="stDownloadButton"] > button:hover,
 div[data-testid="stLinkButton"] a:hover,
 div[data-testid="stLinkButton"] button:hover {
     transform: translateY(-1px);
 }
 
-div[data-testid="stButton"] > button[kind="primary"] {
+div[data-testid="stButton"] > button[kind="primary"],
+div[data-testid="stFormSubmitButton"] > button[kind="primary"] {
     color: #001613;
     background: linear-gradient(135deg, var(--brand), #5be0d7);
     box-shadow: 0 8px 24px rgba(18, 179, 168, 0.35);
     border: 0;
 }
 
-div[data-testid="stButton"] > button[kind="primary"]:hover {
-    color: #001613;
-    background: linear-gradient(135deg, #1bc8bb, #75ebe3);
-    border: 0;
+div[data-testid="stButton"] > button[kind="primary"]:hover,
+div[data-testid="stFormSubmitButton"] > button[kind="primary"]:hover {
+    color: var(--text);
+    background: #10222b;
+    border: 1px solid rgba(18, 179, 168, 0.55);
 }
 
 div[data-testid="stButton"] > button[kind="secondary"],
+div[data-testid="stFormSubmitButton"] > button[kind="secondary"],
 div[data-testid="stDownloadButton"] > button[kind="secondary"] {
     color: var(--text);
     background: #1b2835;
@@ -243,10 +248,23 @@ div[data-testid="stDownloadButton"] > button[kind="secondary"] {
 }
 
 div[data-testid="stButton"] > button[kind="secondary"]:hover,
+div[data-testid="stFormSubmitButton"] > button[kind="secondary"]:hover,
 div[data-testid="stDownloadButton"] > button[kind="secondary"]:hover {
-    color: var(--text);
-    background: #223244;
-    border: 1px solid #2f455a;
+    color: #001613;
+    background: linear-gradient(135deg, var(--brand), #5be0d7);
+    border: 1px solid rgba(18, 179, 168, 0.65);
+}
+
+div[data-testid="stButton"] > button:disabled,
+div[data-testid="stFormSubmitButton"] > button:disabled,
+div[data-testid="stDownloadButton"] > button:disabled {
+    color: #9fb0bd;
+    background: #24313d;
+    border: 1px solid #324454;
+    opacity: 1;
+    cursor: not-allowed;
+    box-shadow: none;
+    transform: none;
 }
 
 div[data-testid="stLinkButton"] a,
@@ -264,8 +282,9 @@ div[data-testid="stLinkButton"] button {
 
 div[data-testid="stLinkButton"] a:hover,
 div[data-testid="stLinkButton"] button:hover {
-    color: #001613;
-    background: linear-gradient(135deg, #ffb257, #ffe09a);
+    color: var(--text);
+    background: #2a1a08;
+    border: 1px solid rgba(255, 159, 67, 0.55);
 }
 
 div[data-testid="stExpander"] {
@@ -420,7 +439,12 @@ def detect_backend_url() -> str | None:
                 return False
 
             payload = defaults.json()
-            return isinstance(payload, dict) and payload.get("runnerEntrypoint") == EXPECTED_RUNNER_ENTRYPOINT
+            capabilities = payload.get("capabilities", []) if isinstance(payload, dict) else []
+            return (
+                isinstance(payload, dict)
+                and payload.get("runnerEntrypoint") == EXPECTED_RUNNER_ENTRYPOINT
+                and "manual-network-template-import" in capabilities
+            )
         except Exception:  # noqa: BLE001
             return False
 
@@ -509,6 +533,31 @@ def load_defaults(base_url: str) -> dict[str, Any]:
     return st.session_state.defaults or {}
 
 
+def render_setup_check(base_url: str, settings: dict[str, Any]) -> None:
+    ok, data = api_post_json(
+        base_url,
+        "/api/precheck",
+        {
+            "mode": "simplechat-api",
+            "url": settings["url"],
+            "stateFile": settings["stateFile"],
+            "networkTemplate": settings["networkTemplate"],
+            "headed": "true",
+        },
+    )
+    if not ok:
+        st.error(data.get("error", "Setup check failed."))
+        return
+
+    checks = data.get("checks", [])
+    lines = [f"[{'OK' if check.get('ok') else 'FAIL'}] {check.get('key')}: {check.get('message')}" for check in checks]
+    if data.get("ok"):
+        st.success("Setup looks good for SimpleChat API mode.")
+    else:
+        st.warning("Setup incomplete. Follow the checklist and retry.")
+    st.code("\n".join(lines) if lines else "No checks returned.")
+
+
 def render_setup_step(base_url: str, settings: dict[str, Any]) -> None:
     st.subheader("Step 0: One-time SimpleChat setup")
     st.markdown(
@@ -552,27 +601,40 @@ def render_setup_step(base_url: str, settings: dict[str, Any]) -> None:
 
     with c3:
         if st.button("Check setup readiness"):
-            ok, data = api_post_json(
-                base_url,
-                "/api/precheck",
-                {
-                    "mode": "simplechat-api",
-                    "url": settings["url"],
-                    "stateFile": settings["stateFile"],
-                    "networkTemplate": settings["networkTemplate"],
-                    "headed": "true",
-                },
+            render_setup_check(base_url, settings)
+
+    with st.container(border=True):
+        st.markdown("#### Import a copied request manually")
+        st.caption("Paste fetch(...), Invoke-WebRequest, or raw JSON body. Only the /api/chat/stream URL and JSON body are saved. Cookies and headers are discarded.")
+        with st.form("manual_request_import", clear_on_submit=True):
+            request_text = st.text_area(
+                "Copied request or JSON body",
+                height=220,
+                placeholder="Paste fetch(...), Invoke-WebRequest, or raw JSON body",
             )
-            if not ok:
-                st.error(data.get("error", "Setup check failed."))
+            import_request = st.form_submit_button(
+                "Create network template",
+                icon=":material/data_object:",
+            )
+
+        if import_request:
+            if not request_text.strip():
+                st.error("Paste a copied PowerShell request first.")
             else:
-                checks = data.get("checks", [])
-                lines = [f"[{'OK' if c.get('ok') else 'FAIL'}] {c.get('key')}: {c.get('message')}" for c in checks]
-                if data.get("ok"):
-                    st.success("Setup looks good for SimpleChat API mode.")
+                ok, data = api_post_json(
+                    base_url,
+                    "/api/import-network-template",
+                    {
+                        "requestText": request_text,
+                        "networkTemplate": settings["networkTemplate"],
+                        "url": settings["url"],
+                    },
+                )
+                if ok and data.get("ok"):
+                    st.success(data.get("message", "Network template created."))
+                    render_setup_check(base_url, settings)
                 else:
-                    st.warning("Setup incomplete. Follow the checklist and retry.")
-                st.code("\n".join(lines) if lines else "No checks returned.")
+                    st.error(data.get("error", "Could not create the network template."))
 
 
 def render_mode_and_files(settings: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:

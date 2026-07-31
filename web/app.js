@@ -27,6 +27,8 @@ const showAdvancedModesEl = document.getElementById("showAdvancedModes");
 const setupOpenChatEl = document.getElementById("setupOpenChat");
 const refreshAuthBtn = document.getElementById("refreshAuthBtn");
 const setupCheckBtn = document.getElementById("setupCheckBtn");
+const manualRequestTextEl = document.getElementById("manualRequestText");
+const importRequestBtn = document.getElementById("importRequestBtn");
 const setupStatusEl = document.getElementById("setupStatus");
 const setupTextEl = document.getElementById("setupText");
 const precheckBtn = document.getElementById("precheckBtn");
@@ -370,6 +372,41 @@ async function refreshLoginSession() {
   }
 }
 
+async function importManualRequest() {
+  const requestText = manualRequestTextEl?.value || "";
+  const url = form.querySelector("[name='url']")?.value || "";
+  const networkTemplate = form.querySelector("[name='networkTemplate']")?.value || "outputs/network-log-ui-full.json";
+  if (!requestText.trim()) {
+    setupStatusEl.textContent = "Paste a copied PowerShell request first.";
+    return;
+  }
+
+  setupStatusEl.textContent = "Extracting request template...";
+  setupTextEl.textContent = "";
+  if (importRequestBtn) importRequestBtn.disabled = true;
+
+  try {
+    const res = await fetch("/api/import-network-template", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requestText, networkTemplate, url }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      setupStatusEl.textContent = data.error || "Could not create the network template.";
+      return;
+    }
+
+    manualRequestTextEl.value = "";
+    setupStatusEl.textContent = data.message;
+    await runSetupCheck({ source: "manual-import" });
+  } catch (err) {
+    setupStatusEl.textContent = `Request import failed: ${err.message}`;
+  } finally {
+    if (importRequestBtn) importRequestBtn.disabled = false;
+  }
+}
+
 async function runPrecheck() {
   precheckStatusEl.textContent = "Running precheck...";
   precheckTextEl.textContent = "";
@@ -574,6 +611,7 @@ form.querySelectorAll("input[name='mode']").forEach((el) => {
 showAdvancedModesEl?.addEventListener("change", updateModeVisibility);
 setupCheckBtn?.addEventListener("click", runSetupCheck);
 refreshAuthBtn?.addEventListener("click", refreshLoginSession);
+importRequestBtn?.addEventListener("click", importManualRequest);
 
 jsonlProfileEl?.addEventListener("change", updateProfileUI);
 jsonlProfileEl?.addEventListener("change", updateProfilePreview);
