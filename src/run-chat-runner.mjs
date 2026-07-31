@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
+import { execSync } from "node:child_process";
 import minimist from "minimist";
 import xlsx from "xlsx";
 import { chromium, request } from "playwright";
@@ -117,16 +119,285 @@ function deepGet(obj, pathExpr) {
   return cur;
 }
 
+function detectModelFromBody(body) {
+  const keys = ["model", "model_name", "deployment", "deployment_name", "engine", "modelId", "model_id"];
+  for (const key of keys) {
+    const val = body?.[key];
+    if (typeof val === "string" && val.trim()) return val.trim();
+  }
+  return "unknown";
+}
+
+function isGuidLike(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || "").trim());
+}
+
+function extractModelCandidates(obj) {
+  if (!obj || typeof obj !== "object") return [];
+  const out = [];
+  const keysByPriority = [
+    "model_name",
+    "modelName",
+    "deployment_name",
+    "deploymentName",
+    "engine",
+    "model",
+    "modelId",
+    "model_id",
+    "deployment",
+  ];
+
+  for (const key of keysByPriority) {
+    const val = obj[key];
+    if (typeof val === "string" && val.trim()) {
+      out.push(val.trim());
+    }
+  }
+
+  return out;
+}
+
+function choosePreferredModel(models) {
+  const unique = [];
+  for (const model of models || []) {
+    const m = String(model || "").trim();
+    if (!m || m === "unknown") continue;
+    if (!unique.includes(m)) unique.push(m);
+  }
+  if (!unique.length) return "unknown";
+
+  const preferred = unique.find((m) => !isGuidLike(m));
+  return preferred || unique[0];
+}
+
+function chooseModelName(models) {
+  const preferred = (models || []).find((m) => {
+    const s = String(m || "").trim();
+    return s && s !== "unknown" && !isGuidLike(s);
+  });
+  return preferred ? String(preferred).trim() : "";
+}
+
+function chooseModelId(models) {
+  const hit = (models || []).find((m) => isGuidLike(m));
+  return hit ? String(hit).trim() : "";
+}
+
+function getModelNameConfidence({ modelName, modelId, inferred }) {
+  const hasName = String(modelName || "").trim() !== "";
+  const hasId = String(modelId || "").trim() !== "";
+  if (hasName && inferred) return "inferred";
+  if (hasName) return "explicit";
+  if (hasId) return "id_only";
+  return "unknown";
+}
+
+function detectModelFromHeaders(headers) {
+  if (!headers || typeof headers !== "object") return "unknown";
+  const modelHeaderKeys = [
+    "x-ms-model",
+    "x-model",
+    "x-openai-model",
+    "openai-model",
+    "model",
+    "model_name",
+    "deployment",
+    "deployment_name",
+  ];
+  const normalized = new Map(Object.entries(headers).map(([k, v]) => [String(k).toLowerCase(), v]));
+  for (const key of modelHeaderKeys) {
+    const val = normalized.get(key);
+    if (typeof val === "string" && val.trim()) return val.trim();
+  }
+  return "unknown";
+}
+
+function collectModelHints(value, limit = 4) {
+  const out = [];
+  const visited = new Set();
+
+  function pushModel(modelVal) {
+    if (!modelVal || modelVal === "unknown") return;
+    if (out.includes(modelVal)) return;
+    out.push(modelVal);
+  }
+
+  function walk(node, depth) {
+    if (node == null || depth > limit) return;
+    if (typeof node !== "object") return;
+    if (visited.has(node)) return;
+    visited.add(node);
+
+    for (const candidate of extractModelCandidates(node)) {
+      pushModel(candidate);
+    }
+
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        walk(item, depth + 1);
+      }
+      return;
+    }
+
+    for (const val of Object.values(node)) {
+      walk(val, depth + 1);
+    }
+  }
+
+  walk(value, 0);
+  return out;
+}
+
+function extractModelPairs(value, limit = 6) {
+  const pairs = [];
+  const visited = new Set();
+  const strictIdKeys = ["model_id", "modelId", "deployment", "deployment_id", "deploymentId", "engine"];
+  const strictNameKeys = ["model_name", "modelName", "deployment_name", "deploymentName", "engine"];
+  const genericIdKeys = ["id"];
+  const genericNameKeys = ["name", "display_name", "displayName"];
+
+  function readString(obj, keys) {
+    for (const key of keys) {
+      const val = obj?.[key];
+      if (typeof val === "string" && val.trim()) return val.trim();
+    }
+    return "";
+  }
+
+  function hasModelContext(pathParts) {
+    return pathParts.some((part) => /model|deployment|engine/i.test(String(part)));
+  }
+
+  function pushPair(id, name) {
+    const idVal = String(id || "").trim();
+    const nameVal = String(name || "").trim();
+    if (!idVal && !nameVal) return;
+    pairs.push({ id: idVal, name: nameVal });
+  }
+
+  function walk(node, depth, pathParts = []) {
+    if (node == null || depth > limit) return;
+    if (typeof node !== "object") return;
+    if (visited.has(node)) return;
+    visited.add(node);
+
+    if (!Array.isArray(node)) {
+      const strictId = readString(node, strictIdKeys);
+      const strictName = readString(node, strictNameKeys);
+      pushPair(strictId, strictName);
+
+      // Allow generic id/name only when inside model/deployment-shaped objects.
+      if (hasModelContext(pathParts)) {
+        const genericId = readString(node, genericIdKeys);
+        const genericName = readString(node, genericNameKeys);
+        pushPair(genericId, genericName);
+      }
+    }
+
+    if (Array.isArray(node)) {
+      for (let i = 0; i < node.length; i += 1) {
+        walk(node[i], depth + 1, [...pathParts, String(i)]);
+      }
+      return;
+    }
+
+    for (const [k, val] of Object.entries(node)) {
+      walk(val, depth + 1, [...pathParts, k]);
+    }
+  }
+
+  walk(value, 0, []);
+  return pairs;
+}
+
+async function resolveModelNameFromBackend(reqCtx, configuredModel) {
+  const endpoints = [
+    "/api/user/settings",
+    "/api/models",
+    "/api/chat/models",
+    "/api/deployments",
+    "/api/chat/config",
+    "/api/config",
+    "/api/settings",
+    "/api/user-settings",
+  ];
+
+  for (const endpoint of endpoints) {
+    try {
+      const res = await reqCtx.get(endpoint);
+      if (!res.ok()) continue;
+      const ct = String(res.headers()["content-type"] || "").toLowerCase();
+      if (!ct.includes("application/json")) continue;
+
+      const payload = await res.json();
+      const pairs = extractModelPairs(payload);
+      if (!pairs.length) continue;
+
+      if (configuredModel) {
+        const byId = pairs.find((p) => p.id && p.id === configuredModel && p.name);
+        if (byId) {
+          return { modelName: byId.name, modelId: byId.id, source: endpoint, inferred: false };
+        }
+      }
+
+      const nonGuidName = pairs.find((p) => p.name && !isGuidLike(p.name));
+      if (nonGuidName) {
+        return { modelName: nonGuidName.name, modelId: nonGuidName.id || "", source: endpoint, inferred: false };
+      }
+    } catch {
+      // Ignore lookup failures and continue.
+    }
+  }
+
+  // Fallback: infer likely model family from recent conversation tags.
+  try {
+    const res = await reqCtx.get("/api/conversations/feed?page_size=20&include_hidden=false");
+    if (res.ok()) {
+      const ct = String(res.headers()["content-type"] || "").toLowerCase();
+      if (ct.includes("application/json")) {
+        const payload = await res.json();
+        const conversations = Array.isArray(payload?.conversations) ? payload.conversations : [];
+        const modelTags = [];
+        for (const conv of conversations) {
+          const tags = Array.isArray(conv?.tags) ? conv.tags : [];
+          for (const t of tags) {
+            if (String(t?.category || "").toLowerCase() !== "model") continue;
+            const val = String(t?.value || "").trim();
+            if (!val || isGuidLike(val)) continue;
+            if (!modelTags.includes(val)) modelTags.push(val);
+          }
+        }
+        if (modelTags.length) {
+          return {
+            modelName: modelTags[0],
+            modelId: configuredModel || "",
+            source: "/api/conversations/feed (inferred)",
+            inferred: true,
+          };
+        }
+      }
+    }
+  } catch {
+    // Ignore inference failures.
+  }
+
+  return { modelName: "", modelId: "", source: "", inferred: false };
+}
+
 function parseSseContent(streamText) {
   const lines = String(streamText || "").split(/\r?\n/);
   const chunks = [];
   const citations = [];
+  const modelHints = new Set();
   for (const line of lines) {
     if (!line.startsWith("data:")) continue;
     const payload = line.slice(5).trim();
     if (!payload) continue;
     try {
       const obj = JSON.parse(payload);
+      for (const model of collectModelHints(obj)) {
+        modelHints.add(model);
+      }
       // Keep plain token chunks (no explicit type) and explicit assistant content frames only.
       if (typeof obj.content !== "string") continue;
       if (!Object.prototype.hasOwnProperty.call(obj, "type")) {
@@ -148,6 +419,7 @@ function parseSseContent(streamText) {
   return {
     text: chunks.join("").trim(),
     citations: dedupeCitations(citations),
+    modelHints: Array.from(modelHints),
   };
 }
 
@@ -197,6 +469,89 @@ function dedupeCitations(citations) {
     out.push(c);
   }
   return out;
+}
+
+function tryExec(command, cwd) {
+  try {
+    return execSync(command, { cwd, stdio: ["ignore", "pipe", "ignore"], encoding: "utf8" }).trim();
+  } catch {
+    return "";
+  }
+}
+
+function getGitContext(cwd) {
+  return {
+    branch: tryExec("git rev-parse --abbrev-ref HEAD", cwd) || "unknown",
+    commit: tryExec("git rev-parse HEAD", cwd) || "unknown",
+  };
+}
+
+function getEnvironmentSnapshot() {
+  return {
+    nodeVersion: process.version || "unknown",
+    platform: process.platform || "unknown",
+    arch: process.arch || "unknown",
+    timezone: (() => {
+      try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || "unknown";
+      } catch {
+        return "unknown";
+      }
+    })(),
+    locale: (() => {
+      try {
+        return Intl.DateTimeFormat().resolvedOptions().locale || "unknown";
+      } catch {
+        return "unknown";
+      }
+    })(),
+  };
+}
+
+function computePercentile(values, percentile) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.ceil((percentile / 100) * sorted.length) - 1;
+  const safeIdx = Math.max(0, Math.min(sorted.length - 1, idx));
+  return sorted[safeIdx];
+}
+
+function summarizeLatency(results) {
+  const values = results
+    .map((r) => Number(r.duration_ms))
+    .filter((n) => Number.isFinite(n) && n >= 0);
+
+  if (!values.length) {
+    return {
+      count: 0,
+      p50: null,
+      p90: null,
+      p95: null,
+      max: null,
+      avg: null,
+    };
+  }
+
+  const total = values.reduce((acc, n) => acc + n, 0);
+  return {
+    count: values.length,
+    p50: computePercentile(values, 50),
+    p90: computePercentile(values, 90),
+    p95: computePercentile(values, 95),
+    max: Math.max(...values),
+    avg: Math.round(total / values.length),
+  };
+}
+
+function summarizeHttpStatuses(results) {
+  const histogram = {};
+  for (const r of results) {
+    const raw = r?.http_status;
+    if (raw == null || String(raw).trim() === "") continue;
+    const key = String(raw).trim();
+    histogram[key] = (histogram[key] || 0) + 1;
+  }
+  return histogram;
 }
 
 const SIMPLECHAT_STATELESS_KEYS = new Set([
@@ -356,10 +711,15 @@ function writeOutputs({ results, outputDir, baseName, jsonlOptions, metadata }) 
       return false;
     }
   }).length;
+  const latency = summarizeLatency(results);
+  const httpStatusHistogram = summarizeHttpStatuses(results);
 
   const metadataRows = [
     { key: "run_id", value: metadata?.runId || "" },
     { key: "timestamp_utc", value: metadata?.timestamp || new Date().toISOString() },
+    { key: "run_started_utc", value: metadata?.runStartedUtc || "" },
+    { key: "run_finished_utc", value: metadata?.runFinishedUtc || "" },
+    { key: "run_duration_ms", value: metadata?.runDurationMs != null ? String(metadata.runDurationMs) : "" },
     { key: "mode", value: metadata?.mode || "" },
     { key: "model", value: metadata?.model || "unknown" },
     { key: "input_file", value: metadata?.inputFile || "" },
@@ -368,7 +728,20 @@ function writeOutputs({ results, outputDir, baseName, jsonlOptions, metadata }) 
     { key: "ok_rows", value: String(okRows) },
     { key: "error_rows", value: String(errorRows) },
     { key: "rows_with_citations", value: String(citationRows) },
+    { key: "latency_samples", value: String(latency.count) },
+    { key: "latency_p50_ms", value: latency.p50 != null ? String(latency.p50) : "" },
+    { key: "latency_p90_ms", value: latency.p90 != null ? String(latency.p90) : "" },
+    { key: "latency_p95_ms", value: latency.p95 != null ? String(latency.p95) : "" },
+    { key: "latency_max_ms", value: latency.max != null ? String(latency.max) : "" },
+    { key: "latency_avg_ms", value: latency.avg != null ? String(latency.avg) : "" },
+    { key: "http_status_histogram_json", value: JSON.stringify(httpStatusHistogram) },
   ];
+
+  if (metadata?.extra && typeof metadata.extra === "object") {
+    for (const [k, v] of Object.entries(metadata.extra)) {
+      metadataRows.push({ key: String(k), value: v == null ? "" : String(v) });
+    }
+  }
 
   const wsMeta = xlsx.utils.json_to_sheet(metadataRows);
   xlsx.utils.book_append_sheet(wb, wsMeta, "run_metadata");
@@ -668,6 +1041,7 @@ async function runUiMode({
   contextColumn,
   baseMetadata,
 }) {
+  const runStarted = Date.now();
   const browser = await chromium.launch({ headless: !headed });
   ensureDir(path.dirname(stateFile));
 
@@ -762,6 +1136,7 @@ async function runUiMode({
     }
 
     try {
+      const requestStarted = Date.now();
       await clickStartChatIfPresent(page, selectors);
       if (perPromptNewChat) {
         await safeClick(page, selectors.newChat);
@@ -796,10 +1171,15 @@ async function runUiMode({
         status: "ok",
         error: "",
         row_data: JSON.stringify(row),
+        request_started_utc: new Date(requestStarted).toISOString(),
         captured_at_utc: new Date().toISOString(),
+        response_completed_utc: new Date().toISOString(),
+        duration_ms: Date.now() - requestStarted,
+        http_status: String(res.status),
       });
       console.log(`Row ${i + 1}/${rows.length}: captured response (${responseText.length} chars).`);
     } catch (err) {
+      const requestEnded = Date.now();
       const screenshotPath = path.join(outputDir, `error-row-${i + 1}.png`);
       ensureDir(outputDir);
       await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
@@ -813,7 +1193,8 @@ async function runUiMode({
         status: "error",
         error: `${err.message} | screenshot=${screenshotPath}`,
         row_data: JSON.stringify(row),
-        captured_at_utc: new Date().toISOString(),
+        captured_at_utc: new Date(requestEnded).toISOString(),
+        response_completed_utc: new Date(requestEnded).toISOString(),
       });
       console.error(`Row ${i + 1}/${rows.length}: error - ${err.message}`);
     }
@@ -828,7 +1209,23 @@ async function runUiMode({
     console.log(`Network log: ${networkLogPath}`);
   }
 
-  return writeOutputs({ results, outputDir, baseName, jsonlOptions, metadata: baseMetadata });
+  const runFinished = Date.now();
+  return writeOutputs({
+    results,
+    outputDir,
+    baseName,
+    jsonlOptions,
+    metadata: {
+      ...baseMetadata,
+      runStartedUtc: new Date(runStarted).toISOString(),
+      runFinishedUtc: new Date(runFinished).toISOString(),
+      runDurationMs: runFinished - runStarted,
+      extra: {
+        ...(baseMetadata?.extra || {}),
+        source_url: String(url || ""),
+      },
+    },
+  });
 }
 
 async function runApiMode({
@@ -846,11 +1243,13 @@ async function runApiMode({
   contextColumn,
   baseMetadata,
 }) {
+  const runStarted = Date.now();
   if (!apiUrl) {
     throw new Error("--api-url is required in api mode.");
   }
 
   const results = [];
+  const responseModelHints = new Set();
 
   for (let i = 0; i < rows.length; i += 1) {
     const row = rows[i];
@@ -875,6 +1274,7 @@ async function runApiMode({
     }
 
     try {
+      const requestStarted = Date.now();
       const requestBody = apiBodyTemplate
         ? JSON.parse(apiBodyTemplate.replace(/\{\{\s*query\s*\}\}/g, query))
         : { messages: [{ role: "user", content: query }] };
@@ -893,6 +1293,14 @@ async function runApiMode({
         throw new Error(`HTTP ${res.status}: ${JSON.stringify(data)}`);
       }
 
+      for (const model of collectModelHints(data)) {
+        responseModelHints.add(model);
+      }
+      const headerModel = detectModelFromHeaders(Object.fromEntries(res.headers.entries()));
+      if (headerModel !== "unknown") {
+        responseModelHints.add(headerModel);
+      }
+
       const responseVal = deepGet(data, apiResponsePath || "choices.0.message.content");
       const responseText = typeof responseVal === "string" ? responseVal : JSON.stringify(responseVal ?? data);
       const citations = extractCitations(data);
@@ -907,11 +1315,15 @@ async function runApiMode({
         status: "ok",
         error: "",
         row_data: JSON.stringify(row),
+        request_started_utc: new Date(requestStarted).toISOString(),
         captured_at_utc: new Date().toISOString(),
+        response_completed_utc: new Date().toISOString(),
+        duration_ms: Date.now() - requestStarted,
       });
 
       console.log(`Row ${i + 1}/${rows.length}: captured API response (${responseText.length} chars).`);
     } catch (err) {
+      const requestEnded = Date.now();
       results.push({
         ...row,
         query,
@@ -922,13 +1334,48 @@ async function runApiMode({
         status: "error",
         error: err.message,
         row_data: JSON.stringify(row),
-        captured_at_utc: new Date().toISOString(),
+        captured_at_utc: new Date(requestEnded).toISOString(),
+        response_completed_utc: new Date(requestEnded).toISOString(),
       });
       console.error(`Row ${i + 1}/${rows.length}: error - ${err.message}`);
     }
   }
 
-  return writeOutputs({ results, outputDir, baseName, jsonlOptions, metadata: baseMetadata });
+  const runFinished = Date.now();
+  const configuredModel = String(baseMetadata?.model || "unknown");
+  const actualModels = Array.from(responseModelHints);
+  const actualModel = choosePreferredModel(actualModels);
+  const actualModelName = chooseModelName(actualModels);
+  const actualModelId = chooseModelId(actualModels) || (isGuidLike(configuredModel) ? configuredModel : "");
+  const modelNameConfidence = getModelNameConfidence({
+    modelName: actualModelName,
+    modelId: actualModelId,
+    inferred: false,
+  });
+  return writeOutputs({
+    results,
+    outputDir,
+    baseName,
+    jsonlOptions,
+    metadata: {
+      ...baseMetadata,
+      model: actualModel !== "unknown" ? actualModel : configuredModel,
+      runStartedUtc: new Date(runStarted).toISOString(),
+      runFinishedUtc: new Date(runFinished).toISOString(),
+      runDurationMs: runFinished - runStarted,
+      extra: {
+        ...(baseMetadata?.extra || {}),
+        api_url: String(apiUrl || ""),
+        api_method: String(apiMethod || ""),
+        configured_model: configuredModel,
+        actual_model: actualModel,
+        actual_model_name: actualModelName,
+        actual_model_id: actualModelId,
+        actual_models: actualModels.join(", "),
+        model_name_confidence: modelNameConfidence,
+      },
+    },
+  });
 }
 
 async function runSimpleChatApiMode({
@@ -944,6 +1391,7 @@ async function runSimpleChatApiMode({
   contextColumn,
   baseMetadata,
 }) {
+  const runStarted = Date.now();
   if (!fs.existsSync(stateFile)) {
     throw new Error(`State file not found: ${stateFile}. Run UI mode once to sign in.`);
   }
@@ -953,6 +1401,7 @@ async function runSimpleChatApiMode({
 
   const apiBase = new URL(url).origin;
   const templatePayload = loadSimpleChatTemplateFromNetworkLog(networkTemplatePath);
+  const detectedSimplechatModel = detectModelFromBody(templatePayload) || baseMetadata?.model || "unknown";
 
   const reqCtx = await request.newContext({
     baseURL: apiBase,
@@ -964,6 +1413,8 @@ async function runSimpleChatApiMode({
   });
 
   const results = [];
+  const responseModelHints = new Set();
+  const modelCatalog = await resolveModelNameFromBackend(reqCtx, detectedSimplechatModel);
 
   for (let i = 0; i < rows.length; i += 1) {
     const row = rows[i];
@@ -987,8 +1438,12 @@ async function runSimpleChatApiMode({
       continue;
     }
 
+    let createConversationStatus = "";
+    let chatStreamStatus = "";
     try {
+      const requestStarted = Date.now();
       const convRes = await reqCtx.post("/api/create_conversation", { data: {} });
+      createConversationStatus = String(convRes.status());
       if (!convRes.ok()) {
         const txt = await convRes.text();
         throw new Error(`create_conversation failed: HTTP ${convRes.status()} ${txt.slice(0, 500)}`);
@@ -1006,6 +1461,7 @@ async function runSimpleChatApiMode({
       };
 
       const streamRes = await reqCtx.post("/api/chat/stream", { data: payload });
+      chatStreamStatus = String(streamRes.status());
       if (!streamRes.ok()) {
         const txt = await streamRes.text();
         throw new Error(`chat/stream failed: HTTP ${streamRes.status()} ${txt.slice(0, 500)}`);
@@ -1013,6 +1469,13 @@ async function runSimpleChatApiMode({
 
       const sseText = await streamRes.text();
       const parsed = parseSseContent(sseText);
+      for (const model of parsed.modelHints || []) {
+        responseModelHints.add(model);
+      }
+      const headerModel = detectModelFromHeaders(streamRes.headers());
+      if (headerModel !== "unknown") {
+        responseModelHints.add(headerModel);
+      }
       const responseText = parsed.text;
       if (!responseText) {
         throw new Error("No assistant content chunks found in SSE response.");
@@ -1023,15 +1486,23 @@ async function runSimpleChatApiMode({
         query,
         response: reference,
         context_value: contextValue,
+        conversation_id: conversationId,
         model_response: responseText,
         citations_json: JSON.stringify(parsed.citations || []),
         status: "ok",
         error: "",
         row_data: JSON.stringify(row),
+        request_started_utc: new Date(requestStarted).toISOString(),
         captured_at_utc: new Date().toISOString(),
+        response_completed_utc: new Date().toISOString(),
+        duration_ms: Date.now() - requestStarted,
+        http_status: chatStreamStatus || createConversationStatus,
+        create_conversation_status: createConversationStatus,
+        chat_stream_status: chatStreamStatus,
       });
       console.log(`Row ${i + 1}/${rows.length}: captured SimpleChat API response (${responseText.length} chars).`);
     } catch (err) {
+      const requestEnded = Date.now();
       results.push({
         ...row,
         query,
@@ -1042,14 +1513,62 @@ async function runSimpleChatApiMode({
         status: "error",
         error: err.message,
         row_data: JSON.stringify(row),
-        captured_at_utc: new Date().toISOString(),
+        captured_at_utc: new Date(requestEnded).toISOString(),
+        response_completed_utc: new Date(requestEnded).toISOString(),
+        http_status: chatStreamStatus || createConversationStatus,
+        create_conversation_status: createConversationStatus,
+        chat_stream_status: chatStreamStatus,
       });
       console.error(`Row ${i + 1}/${rows.length}: error - ${err.message}`);
     }
   }
 
   await reqCtx.dispose();
-  return writeOutputs({ results, outputDir, baseName, jsonlOptions, metadata: baseMetadata });
+  const runFinished = Date.now();
+  const configuredModel = String(detectedSimplechatModel || baseMetadata?.model || "unknown");
+  if (modelCatalog.modelName) {
+    responseModelHints.add(modelCatalog.modelName);
+  }
+  if (modelCatalog.modelId) {
+    responseModelHints.add(modelCatalog.modelId);
+  }
+  const actualModels = Array.from(responseModelHints);
+  const actualModel = choosePreferredModel(actualModels);
+  const actualModelName = chooseModelName(actualModels) || modelCatalog.modelName || "";
+  const actualModelId = chooseModelId(actualModels) || modelCatalog.modelId || (isGuidLike(configuredModel) ? configuredModel : "");
+  const modelNameConfidence = getModelNameConfidence({
+    modelName: actualModelName,
+    modelId: actualModelId,
+    inferred: Boolean(modelCatalog.inferred),
+  });
+  return writeOutputs({
+    results,
+    outputDir,
+    baseName,
+    jsonlOptions,
+    metadata: {
+      ...baseMetadata,
+      model: actualModel !== "unknown" ? actualModel : configuredModel,
+      runStartedUtc: new Date(runStarted).toISOString(),
+      runFinishedUtc: new Date(runFinished).toISOString(),
+      runDurationMs: runFinished - runStarted,
+      extra: {
+        ...(baseMetadata?.extra || {}),
+        source_url: String(url || ""),
+        api_base: String(apiBase || ""),
+        state_file: String(stateFile || ""),
+        network_template: String(networkTemplatePath || ""),
+        configured_model: configuredModel,
+        actual_model: actualModel,
+        actual_model_name: actualModelName,
+        actual_model_id: actualModelId,
+        actual_models: actualModels.join(", "),
+        model_name_resolution_source: modelCatalog.source || "",
+        model_name_inferred: modelCatalog.inferred ? "true" : "false",
+        model_name_confidence: modelNameConfidence,
+      },
+    },
+  });
 }
 
 async function main() {
@@ -1167,6 +1686,11 @@ async function main() {
   let outputs;
   const runTimestamp = String(argv["run-timestamp"] || new Date().toISOString());
   const runId = String(argv["run-id"] || nowStamp());
+  const cwd = process.cwd();
+  const gitContext = getGitContext(cwd);
+  const envSnapshot = getEnvironmentSnapshot();
+  const runnerEntrypoint = path.relative(cwd, path.resolve(process.argv[1] || "src/run-chat-runner.mjs"));
+  const backendIdentity = `runner:${runnerEntrypoint}|pid:${process.pid}|host:${os.hostname()}`;
   const rawArgv = process.argv.slice(2);
   const hasFlag = (name) => rawArgv.some((token) => token === `--${name}` || token.startsWith(`--${name}=`));
   const baseMetadata = {
@@ -1176,6 +1700,18 @@ async function main() {
     model: String(argv["run-model"] || "unknown"),
     inputFile: inputPath,
     sheetName,
+    extra: {
+      backend_identity: backendIdentity,
+      runner_entrypoint: runnerEntrypoint,
+      git_branch: gitContext.branch,
+      git_commit: gitContext.commit,
+      node_version: envSnapshot.nodeVersion,
+      platform: envSnapshot.platform,
+      arch: envSnapshot.arch,
+      timezone: envSnapshot.timezone,
+      locale: envSnapshot.locale,
+      env_snapshot_json: JSON.stringify(envSnapshot),
+    },
   };
   const jsonlOptions = {
     profile: String(argv["jsonl-profile"] || "foundry-basic"),

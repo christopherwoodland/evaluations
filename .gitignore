@@ -2,3 +2,7 @@ node_modules/
 outputs/
 .auth/
 *.log
+.venv/
+__pycache__/
+*.pyc
+.streamlit/

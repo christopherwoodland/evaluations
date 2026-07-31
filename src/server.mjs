@@ -22,6 +22,7 @@ const DEFAULT_SELECTORS = process.env.SELECTORS_PATH || "selectors.example.json"
 const DEFAULT_OUTPUT_DIR = process.env.OUTPUT_DIR || "outputs";
 const DEFAULT_FOUNDRY_EXPORT_DIR = process.env.FOUNDRY_EXPORT_DIR || "foundry_exports";
 const DEFAULT_MASK_LOGS = String(process.env.MASK_LOGS ?? "true").toLowerCase() !== "false";
+const RUNNER_ENTRYPOINT = "src/run-chat-runner.mjs";
 
 const app = express();
 
@@ -31,6 +32,7 @@ const authDir = path.join(ROOT, ".auth");
 const examplesDir = path.join(ROOT, "examples");
 const historyPath = path.join(outputsDir, "run-history.json");
 const lastRunPayloadPath = path.join(outputsDir, "last-run-payload.json");
+const modelContextPath = path.join(outputsDir, "model-context.json");
 
 for (const dir of [uploadsDir, outputsDir, authDir, examplesDir]) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -58,7 +60,7 @@ app.use("/examples", express.static(examplesDir));
 app.use(express.static(path.join(ROOT, "web")));
 
 app.get("/api/health", (_, res) => {
-  res.json({ ok: true, service: "wizard", cwd: ROOT });
+  res.json({ ok: true, service: "wizard", cwd: ROOT, runnerEntrypoint: RUNNER_ENTRYPOINT });
 });
 
 app.get("/api/files/defaults", (_, res) => {
@@ -79,6 +81,7 @@ app.get("/api/files/defaults", (_, res) => {
     defaultStrictSchema: process.env.STRICT_SCHEMA || "false",
     defaultFoundryExportDir: DEFAULT_FOUNDRY_EXPORT_DIR,
     defaultMaskLogs: DEFAULT_MASK_LOGS,
+    runnerEntrypoint: RUNNER_ENTRYPOINT,
   });
 });
 
@@ -527,6 +530,8 @@ function buildSimpleChatRunContext(url, networkTemplatePath) {
 
     const templateBody = JSON.parse(req.postData);
     const model = detectModelFromBody(templateBody);
+    const cachedModelContext = readModelContext();
+    const modelName = String(cachedModelContext?.modelName || "").trim();
     const body = {
       ...templateBody,
       message: "<query>",
@@ -535,7 +540,9 @@ function buildSimpleChatRunContext(url, networkTemplatePath) {
 
     return {
       mode: "simplechat-api",
-      model,
+      model: modelName || model,
+      model_id: model,
+      model_name: modelName || "",
       exampleRequest: sanitizeObject({
         method: req.method || "POST",
         url: `${new URL(url).origin}/api/chat/stream`,
@@ -547,9 +554,14 @@ function buildSimpleChatRunContext(url, networkTemplatePath) {
       }),
     };
   } catch {
+    const cachedModelContext = readModelContext();
+    const modelName = String(cachedModelContext?.modelName || "").trim();
+    const modelId = String(cachedModelContext?.modelId || "unknown").trim() || "unknown";
     return {
       mode: "simplechat-api",
-      model: "unknown",
+      model: modelName || modelId,
+      model_id: modelId,
+      model_name: modelName || "",
       exampleRequest: { note: "Could not parse network template for request preview." },
     };
   }
@@ -803,12 +815,23 @@ async function refreshSimpleChatAuth({ url, statePath, timeoutMs }) {
         });
         lastStatus = authRes.status();
         if (lastStatus === 200) {
+          let modelInfo = { modelName: "", modelId: "" };
+          try {
+            modelInfo = await fetchModelContextFromUiApis(context, baseURL);
+            writeModelContext(modelInfo);
+          } catch {
+            // Do not fail auth refresh if model context capture fails.
+          }
+
           await context.storageState({ path: statePath });
           await browser.close();
+          const modelDetailLines = [];
+          if (modelInfo.modelName) modelDetailLines.push(`Model name: ${modelInfo.modelName}`);
+          if (modelInfo.modelId) modelDetailLines.push(`Model id: ${modelInfo.modelId}`);
           return {
             ok: true,
             message: "Login refresh complete. Saved auth state is valid.",
-            details: `Saved state: ${toWorkspaceRelativePath(statePath)}\nAuth check status: 200`,
+            details: `Saved state: ${toWorkspaceRelativePath(statePath)}\nAuth check status: 200${modelDetailLines.length ? `\n${modelDetailLines.join("\n")}` : ""}`,
           };
         }
       } catch {
@@ -832,4 +855,142 @@ async function refreshSimpleChatAuth({ url, statePath, timeoutMs }) {
       error: `Refresh auth failed: ${error.message || String(error)}`,
     };
   }
+}
+
+function readModelContext() {
+  try {
+    if (!fs.existsSync(modelContextPath)) return null;
+    const parsed = JSON.parse(fs.readFileSync(modelContextPath, "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeModelContext(modelContext) {
+  const safe = {
+    modelName: String(modelContext?.modelName || "").trim(),
+    modelId: String(modelContext?.modelId || "").trim(),
+    source: String(modelContext?.source || "").trim(),
+    capturedAtUtc: new Date().toISOString(),
+  };
+  fs.writeFileSync(modelContextPath, JSON.stringify(safe, null, 2), "utf8");
+}
+
+function isGuidLike(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || "").trim());
+}
+
+function normalizePreferredModelId(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (!raw.includes(":")) return raw;
+  const parts = raw.split(":");
+  return parts[parts.length - 1] || raw;
+}
+
+function pickFirstModelNameCandidates(value, maxDepth = 6) {
+  const out = [];
+  const visited = new Set();
+  const allow = /\b(gpt|claude|phi|llama|mistral|gemini|o1|o3|o4)\b/i;
+
+  function push(v) {
+    const s = String(v || "").trim();
+    if (!s || isGuidLike(s)) return;
+    if (!allow.test(s)) return;
+    if (!out.includes(s)) out.push(s);
+  }
+
+  function walk(node, depth) {
+    if (node == null || depth > maxDepth) return;
+    if (typeof node === "string") {
+      push(node);
+      return;
+    }
+    if (typeof node !== "object") return;
+    if (visited.has(node)) return;
+    visited.add(node);
+
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, depth + 1);
+      return;
+    }
+
+    for (const [k, v] of Object.entries(node)) {
+      if (typeof v === "string" && /model|deployment/i.test(k)) {
+        push(v);
+      }
+      walk(v, depth + 1);
+    }
+  }
+
+  walk(value, 0);
+  return out;
+}
+
+function extractModelTagFromConversations(payload) {
+  const conversations = Array.isArray(payload?.conversations) ? payload.conversations : [];
+  for (const conv of conversations) {
+    const tags = Array.isArray(conv?.tags) ? conv.tags : [];
+    for (const tag of tags) {
+      if (String(tag?.category || "").toLowerCase() !== "model") continue;
+      const value = String(tag?.value || "").trim();
+      if (!value || isGuidLike(value)) continue;
+      return value;
+    }
+  }
+  return "";
+}
+
+async function fetchModelContextFromUiApis(context, baseURL) {
+  const empty = { modelName: "", modelId: "", source: "" };
+
+  try {
+    const settingsRes = await context.request.get(`${baseURL}/api/user/settings`, {
+      timeout: 8000,
+      failOnStatusCode: false,
+    });
+    if (settingsRes.ok()) {
+      const settings = await settingsRes.json().catch(() => null);
+      const preferredRaw =
+        settings?.settings?.preferredModelId ||
+        settings?.preferredModelId ||
+        settings?.settings?.selectedModelId ||
+        settings?.selectedModelId ||
+        "";
+      const preferredModelId = normalizePreferredModelId(preferredRaw);
+      const modelNames = pickFirstModelNameCandidates(settings);
+      if (modelNames.length || preferredModelId) {
+        return {
+          modelName: modelNames[0] || "",
+          modelId: preferredModelId || "",
+          source: "/api/user/settings",
+        };
+      }
+    }
+  } catch {
+    // Continue with fallback endpoint.
+  }
+
+  try {
+    const feedRes = await context.request.get(`${baseURL}/api/conversations/feed?page_size=20&include_hidden=false`, {
+      timeout: 8000,
+      failOnStatusCode: false,
+    });
+    if (feedRes.ok()) {
+      const feed = await feedRes.json().catch(() => null);
+      const modelName = extractModelTagFromConversations(feed);
+      if (modelName) {
+        return {
+          modelName,
+          modelId: "",
+          source: "/api/conversations/feed",
+        };
+      }
+    }
+  } catch {
+    // Ignore feed lookup failures.
+  }
+
+  return empty;
 }

@@ -10,6 +10,8 @@
     "run": "node src/run-chat-runner.mjs",
     "run:ui": "node src/run-chat-runner.mjs --mode ui",
     "run:api": "node src/run-chat-runner.mjs --mode api",
+    "python-ui": "python -m streamlit run python-ui/app.py",
+    "python-ui:setup": "powershell -ExecutionPolicy Bypass -File ./python-ui/start-python-ui.ps1",
     "smoke": "node src/smoke-test.mjs",
     "smoke:api": "node src/smoke-test-api.mjs",
     "smoke:all": "npm run smoke && npm run smoke:api"
