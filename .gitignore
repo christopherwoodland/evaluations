@@ -1,8 +1,39 @@
+# Dependencies / runtime
 node_modules/
-outputs/
-.auth/
-*.log
 .venv/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 .streamlit/
+
+# Logs / temp
+*.log
+*.tmp
+*.temp
+*.bak
+Thumbs.db
+.DS_Store
+
+# Local auth / secrets
+.auth/
+.env
+.env.*
+!.env.example
+*.secrets.json
+*.local
+
+# Key / certificate material
+*.pem
+*.key
+*.pfx
+*.p12
+*.jks
+*.kdbx
+id_rsa
+id_ed25519
+
+# Generated outputs and user uploads
+outputs/
+foundry_exports/
+uploads/
