@@ -99,6 +99,66 @@ In the sidebar, set the backend URL or use Auto-detect.
 - `ui`: browser automation mode
 - `api`: generic HTTP endpoint mode
 
+## Manual network template creation (Step 0)
+
+You can create `outputs/network-log-ui-full.json` without running a full UI capture.
+
+This is useful when you already have a copied request from browser DevTools or PowerShell.
+
+### Standard web wizard
+
+1. Start backend from repo root:
+
+```bash
+npm run wizard
+```
+
+2. Open the wizard and go to **Step 0: One-time SimpleChat setup**.
+3. Expand **Import a copied request manually**.
+4. Paste one of the supported formats:
+	- Full `fetch(...)` call
+	- PowerShell `Invoke-WebRequest` snippet
+	- Raw JSON request body
+5. Click **Create network template**.
+6. Click **Check setup readiness** to confirm the template is valid.
+
+### Python Streamlit UI
+
+1. Start backend:
+
+```bash
+npm run wizard
+```
+
+2. Start Streamlit UI:
+
+```bash
+streamlit run python-ui/app.py
+```
+
+3. Open the **Setup** tab.
+4. In **Import a copied request manually**, paste `fetch(...)`, PowerShell, or raw JSON.
+5. Click **Create network template**.
+6. The app runs setup check again automatically and shows pass/fail checks.
+
+### What gets saved
+
+- The backend writes a single sanitized request template event to `outputs/network-log-ui-full.json` (or your selected network template path).
+- Only request URL + JSON body needed for replay are stored.
+- Cookies/headers are discarded.
+- Stateful conversation/message fields are removed from the pasted payload before save.
+
+### Safety note
+
+- Do not commit copied auth/session material.
+- Even though import sanitizes data, treat pasted requests as sensitive and paste only what is needed.
+
+### If this does not work
+
+- Verify both UIs point to the same backend instance.
+- If multiple backend instances are running, stop old ones and retry.
+- Re-run setup readiness check after import.
+
 ## Outputs and metadata
 
 Outputs are written to `outputs/` by default.

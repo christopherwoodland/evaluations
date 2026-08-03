@@ -61,6 +61,39 @@ Or use the helper launcher:
 4. Click `Run batch`.
 5. Use artifact links to download Excel/JSONL outputs.
 
+## Manual network template creation in Setup
+
+You can create the network template manually from a copied request, without running browser capture mode.
+
+In the **Setup** tab:
+
+1. Open **Import a copied request manually**.
+2. Paste one of the following:
+	- A full `fetch(...)` call
+	- A PowerShell `Invoke-WebRequest` snippet
+	- A raw JSON request body
+3. Click **Create network template**.
+4. The UI re-runs setup checks and shows status immediately.
+
+By default this writes to `outputs/network-log-ui-full.json` (or whatever path is configured in the network template field).
+
+### Sanitization behavior
+
+- URL must target `/api/chat/stream`.
+- Request body must parse as JSON object.
+- Cookies and request headers are not persisted.
+- Stateful conversation/message keys are removed before save.
+
+### Troubleshooting
+
+- If import returns endpoint-not-found, your backend is likely an older instance. Restart backend from repo root with:
+
+```bash
+npm run wizard
+```
+
+- If auto-detect picks the wrong backend, set backend URL manually in the sidebar.
+
 ## Notes
 
 - The Python UI is a frontend to the existing Node backend API.
