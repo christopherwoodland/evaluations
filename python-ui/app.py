@@ -581,6 +581,33 @@ def render_setup_check(base_url: str, settings: dict[str, Any]) -> None:
     st.code("\n".join(lines) if lines else "No checks returned.")
 
 
+def refresh_login_session(base_url: str, settings: dict[str, Any]) -> None:
+    payload = {
+        "url": settings["url"],
+        "stateFile": settings["stateFile"],
+        "networkTemplate": settings["networkTemplate"],
+        "timeoutSec": 300,
+    }
+
+    ok, data = api_post_json(base_url, "/api/refresh-auth", payload)
+
+    err_text = str(data.get("error", "")) if isinstance(data, dict) else ""
+    if (not ok) and "Cannot POST /api/refresh-auth" in err_text:
+        discovered = detect_backend_url()
+        if discovered and discovered.rstrip("/") != base_url.rstrip("/"):
+            st.warning(f"Backend mismatch detected. Retrying with {discovered}")
+            ok, data = api_post_json(discovered, "/api/refresh-auth", payload)
+            if ok and data.get("ok"):
+                st.session_state.backend_url = discovered
+
+    if ok and data.get("ok"):
+        st.success(data.get("message", "Login refresh complete."))
+        if data.get("details"):
+            st.code(data["details"])
+    else:
+        st.error(data.get("error", "Login refresh failed."))
+
+
 def render_setup_step(base_url: str, settings: dict[str, Any]) -> None:
     st.subheader("Step 0: One-time SimpleChat setup")
     st.markdown(
@@ -594,33 +621,11 @@ def render_setup_step(base_url: str, settings: dict[str, Any]) -> None:
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.link_button("Open SimpleChat", settings["url"])
+        if st.button("Open SimpleChat"):
+            refresh_login_session(base_url, settings)
     with c2:
         if st.button("Refresh login session"):
-            payload = {
-                "url": settings["url"],
-                "stateFile": settings["stateFile"],
-                "networkTemplate": settings["networkTemplate"],
-                "timeoutSec": 300,
-            }
-
-            ok, data = api_post_json(base_url, "/api/refresh-auth", payload)
-
-            err_text = str(data.get("error", "")) if isinstance(data, dict) else ""
-            if (not ok) and "Cannot POST /api/refresh-auth" in err_text:
-                discovered = detect_backend_url()
-                if discovered and discovered.rstrip("/") != base_url.rstrip("/"):
-                    st.warning(f"Backend mismatch detected. Retrying with {discovered}")
-                    ok, data = api_post_json(discovered, "/api/refresh-auth", payload)
-                    if ok and data.get("ok"):
-                        st.session_state.backend_url = discovered
-
-            if ok and data.get("ok"):
-                st.success(data.get("message", "Login refresh complete."))
-                if data.get("details"):
-                    st.code(data["details"])
-            else:
-                st.error(data.get("error", "Login refresh failed."))
+            refresh_login_session(base_url, settings)
 
     with c3:
         if st.button("Check setup readiness"):

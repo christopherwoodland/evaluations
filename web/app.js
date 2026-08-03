@@ -79,10 +79,6 @@ async function hydrateDefaults() {
     setInputValue("jsonlGroundTruthKey", d.defaultJsonlGroundTruthKey);
     setInputValue("jsonlContextKey", d.defaultJsonlContextKey);
 
-    if (setupOpenChatEl && d.defaultChatUrl) {
-      setupOpenChatEl.href = String(d.defaultChatUrl);
-    }
-
     const strict = form.querySelector("input[name='strictSchema']");
     if (strict && d.defaultStrictSchema != null) {
       strict.checked = String(d.defaultStrictSchema).toLowerCase() === "true";
@@ -342,6 +338,7 @@ async function refreshLoginSession() {
 
   setupStatusEl.textContent = "Opening browser for sign-in. Complete login and wait for capture...";
   setupTextEl.textContent = "";
+  if (setupOpenChatEl) setupOpenChatEl.disabled = true;
   if (refreshAuthBtn) refreshAuthBtn.disabled = true;
 
   try {
@@ -368,6 +365,7 @@ async function refreshLoginSession() {
   } catch (err) {
     setupStatusEl.textContent = `Login refresh failed: ${err.message}`;
   } finally {
+    if (setupOpenChatEl) setupOpenChatEl.disabled = false;
     if (refreshAuthBtn) refreshAuthBtn.disabled = false;
   }
 }
@@ -610,6 +608,7 @@ form.querySelectorAll("input[name='mode']").forEach((el) => {
 });
 showAdvancedModesEl?.addEventListener("change", updateModeVisibility);
 setupCheckBtn?.addEventListener("click", runSetupCheck);
+setupOpenChatEl?.addEventListener("click", refreshLoginSession);
 refreshAuthBtn?.addEventListener("click", refreshLoginSession);
 importRequestBtn?.addEventListener("click", importManualRequest);
 

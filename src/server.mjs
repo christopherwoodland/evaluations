@@ -966,13 +966,24 @@ async function refreshSimpleChatAuth({ url, statePath, timeoutMs }) {
   let context;
   try {
     browser = await chromium.launch({ headless: false });
-    context = await browser.newContext(fs.existsSync(statePath) ? { storageState: statePath } : undefined);
+    // Always start with a clean context so the user can complete login manually.
+    context = await browser.newContext();
     const page = await context.newPage();
 
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+    const parsedUrl = new URL(url);
+    const baseURL = parsedUrl.origin;
+    const postLoginPath = `${parsedUrl.pathname || "/"}${parsedUrl.search || ""}`;
+    const directLoginUrl = `${baseURL}/.auth/login/aad?post_login_redirect_url=${encodeURIComponent(postLoginPath)}`;
 
-    const baseURL = new URL(url).origin;
+    // Prefer direct auth challenge to keep the first page stable for manual sign-in.
+    const directLoginResponse = await page.goto(directLoginUrl, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => null);
+    if (!directLoginResponse || directLoginResponse.status() >= 400) {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+    }
+
     const startedAt = Date.now();
+    const minManualOpenMs = 15_000;
+    const targetPathname = (parsedUrl.pathname || "/").toLowerCase();
     let lastStatus = 0;
 
     // Wait for user to complete login in the opened browser, then persist refreshed state.
@@ -983,7 +994,16 @@ async function refreshSimpleChatAuth({ url, statePath, timeoutMs }) {
           failOnStatusCode: false,
         });
         lastStatus = authRes.status();
-        if (lastStatus === 200) {
+        const elapsedMs = Date.now() - startedAt;
+        let onChatPage = false;
+        try {
+          const current = new URL(page.url());
+          onChatPage = current.origin === baseURL && current.pathname.toLowerCase().startsWith(targetPathname);
+        } catch {
+          onChatPage = false;
+        }
+
+        if (lastStatus === 200 && elapsedMs >= minManualOpenMs && onChatPage) {
           let modelInfo = { modelName: "", modelId: "" };
           try {
             modelInfo = await fetchModelContextFromUiApis(context, baseURL);
@@ -993,13 +1013,12 @@ async function refreshSimpleChatAuth({ url, statePath, timeoutMs }) {
           }
 
           await context.storageState({ path: statePath });
-          await browser.close();
           const modelDetailLines = [];
           if (modelInfo.modelName) modelDetailLines.push(`Model name: ${modelInfo.modelName}`);
           if (modelInfo.modelId) modelDetailLines.push(`Model id: ${modelInfo.modelId}`);
           return {
             ok: true,
-            message: "Login refresh complete. Saved auth state is valid.",
+            message: "Login refresh complete. Saved auth state is valid. Close the browser window manually when finished.",
             details: `Saved state: ${toWorkspaceRelativePath(statePath)}\nAuth check status: 200${modelDetailLines.length ? `\n${modelDetailLines.join("\n")}` : ""}`,
           };
         }
@@ -1013,7 +1032,7 @@ async function refreshSimpleChatAuth({ url, statePath, timeoutMs }) {
     await browser.close();
     return {
       ok: false,
-      error: `Timed out waiting for login to complete. Last auth status: ${lastStatus || "unavailable"}.`,
+      error: `Timed out waiting for manual login completion. Last auth status: ${lastStatus || "unavailable"}.`,
     };
   } catch (error) {
     if (browser) {
