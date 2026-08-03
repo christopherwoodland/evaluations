@@ -398,6 +398,13 @@ function parseSseContent(streamText) {
       for (const model of collectModelHints(obj)) {
         modelHints.add(model);
       }
+
+      // Capture citation/source metadata even when this SSE frame has no text content.
+      const detected = extractCitations(obj);
+      if (detected.length) {
+        citations.push(...detected);
+      }
+
       // Keep plain token chunks (no explicit type) and explicit assistant content frames only.
       if (typeof obj.content !== "string") continue;
       if (!Object.prototype.hasOwnProperty.call(obj, "type")) {
@@ -406,11 +413,6 @@ function parseSseContent(streamText) {
       }
       if (obj.type === "assistant_content" || obj.type === "output_text" || obj.type === "message_delta") {
         chunks.push(obj.content);
-      }
-
-      const detected = extractCitations(obj);
-      if (detected.length) {
-        citations.push(...detected);
       }
     } catch {
       // Ignore non-JSON or heartbeat frames.
@@ -426,9 +428,13 @@ function parseSseContent(streamText) {
 function extractCitations(value) {
   const candidates = [
     value?.citations,
+    value?.sources,
     value?.context?.citations,
+    value?.context?.sources,
     value?.message?.context?.citations,
+    value?.message?.context?.sources,
     value?.choices?.[0]?.message?.context?.citations,
+    value?.choices?.[0]?.message?.context?.sources,
     value?.references,
   ];
 
@@ -469,6 +475,44 @@ function dedupeCitations(citations) {
     out.push(c);
   }
   return out;
+}
+
+function extractCitationsFromResponseText(text) {
+  const input = String(text || "");
+  if (!input) return [];
+
+  const lines = input.split(/\r?\n/);
+  const out = [];
+  const urlRx = /https?:\/\/[^\s)\]]+/gi;
+
+  for (const rawLine of lines) {
+    const line = String(rawLine || "").trim();
+    if (!line) continue;
+    const matches = line.match(urlRx);
+    if (!matches?.length) continue;
+
+    // Keep line text and first URL as normalized citation fallback.
+    const firstUrl = String(matches[0] || "").trim();
+    const cleanedText = line.replace(/^[-*\d.\s]+/, "").trim();
+    out.push({
+      url: firstUrl,
+      text: cleanedText || firstUrl,
+    });
+  }
+
+  return dedupeCitations(out);
+}
+
+function shouldEnableWebSources(contextValue) {
+  const text = String(contextValue || "").trim().toLowerCase();
+  if (!text) return false;
+  return /\b(web|internet|search|source|sources|grounded)\b/.test(text);
+}
+
+function withCitationInstruction(query) {
+  const base = String(query || "").trim();
+  if (!base) return base;
+  return `${base}\n\nPlease provide citations/sources for your answer. Include a \"Sources\" section with source title and URL for each factual claim. If no verifiable sources are available, explicitly state \"No sources available.\"`;
 }
 
 function tryExec(command, cwd) {
@@ -1387,6 +1431,7 @@ async function runSimpleChatApiMode({
   baseName,
   stateFile,
   networkTemplatePath,
+  timeoutMs,
   jsonlOptions,
   contextColumn,
   baseMetadata,
@@ -1442,7 +1487,10 @@ async function runSimpleChatApiMode({
     let chatStreamStatus = "";
     try {
       const requestStarted = Date.now();
-      const convRes = await reqCtx.post("/api/create_conversation", { data: {} });
+      const convRes = await reqCtx.post("/api/create_conversation", {
+        data: {},
+        timeout: timeoutMs,
+      });
       createConversationStatus = String(convRes.status());
       if (!convRes.ok()) {
         const txt = await convRes.text();
@@ -1456,11 +1504,14 @@ async function runSimpleChatApiMode({
 
       const payload = {
         ...templatePayload,
-        message: query,
+        message: withCitationInstruction(query),
         conversation_id: conversationId,
       };
 
-      const streamRes = await reqCtx.post("/api/chat/stream", { data: payload });
+      const streamRes = await reqCtx.post("/api/chat/stream", {
+        data: payload,
+        timeout: timeoutMs,
+      });
       chatStreamStatus = String(streamRes.status());
       if (!streamRes.ok()) {
         const txt = await streamRes.text();
@@ -1481,6 +1532,8 @@ async function runSimpleChatApiMode({
         throw new Error("No assistant content chunks found in SSE response.");
       }
 
+      const effectiveCitations = extractCitationsFromResponseText(responseText);
+
       results.push({
         ...row,
         query,
@@ -1488,7 +1541,7 @@ async function runSimpleChatApiMode({
         context_value: contextValue,
         conversation_id: conversationId,
         model_response: responseText,
-        citations_json: JSON.stringify(parsed.citations || []),
+        citations_json: JSON.stringify(effectiveCitations || []),
         status: "ok",
         error: "",
         row_data: JSON.stringify(row),
@@ -1791,6 +1844,7 @@ async function main() {
       baseName,
       stateFile,
       networkTemplatePath: path.resolve(argv["network-template"]),
+      timeoutMs,
       jsonlOptions,
       contextColumn,
       baseMetadata,
