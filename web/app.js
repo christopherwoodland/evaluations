@@ -33,6 +33,14 @@ const showAdvancedModesEl = document.getElementById("showAdvancedModes");
 const setupOpenChatEl = document.getElementById("setupOpenChat");
 const refreshAuthBtn = document.getElementById("refreshAuthBtn");
 const setupCheckBtn = document.getElementById("setupCheckBtn");
+const networkTemplateProfileEl = document.getElementById("networkTemplateProfile");
+const configNetworkTemplateProfileEl = document.getElementById("configNetworkTemplateProfile");
+const newNetworkProfileNameEl = document.getElementById("newNetworkProfileName");
+const saveNetworkProfileBtn = document.getElementById("saveNetworkProfileBtn");
+const setDefaultNetworkProfileBtn = document.getElementById("setDefaultNetworkProfileBtn");
+const deleteNetworkProfileBtn = document.getElementById("deleteNetworkProfileBtn");
+const networkProfileStatusEl = document.getElementById("networkProfileStatus");
+const configNetworkProfileWarningEl = document.getElementById("configNetworkProfileWarning");
 const manualRequestTextEl = document.getElementById("manualRequestText");
 const importRequestBtn = document.getElementById("importRequestBtn");
 const setupStatusEl = document.getElementById("setupStatus");
@@ -51,6 +59,8 @@ let hasAutoSetupRun = false;
 let runProgressTimer = null;
 let runProgressStartMs = 0;
 let runProgressValue = 0;
+let networkTemplateProfiles = [];
+let defaultNetworkTemplateProfileId = "";
 
 function boolFromValue(value, fallback = false) {
   if (value == null) return fallback;
@@ -96,6 +106,7 @@ async function hydrateDefaults() {
     if (maskLogs && d.defaultMaskLogs != null) {
       maskLogs.checked = boolFromValue(d.defaultMaskLogs, true);
     }
+    await loadNetworkTemplateProfiles(String(d.defaultNetworkTemplateProfile || "").trim());
     updateProfileUI();
     updateProfilePreview();
   } catch {
@@ -126,6 +137,239 @@ function setInputValue(name, value) {
   const el = form.querySelector(`[name='${name}']`);
   if (!el) return;
   el.value = String(value);
+}
+
+function getSelectedNetworkTemplateProfileId() {
+  return String(configNetworkTemplateProfileEl?.value || networkTemplateProfileEl?.value || "").trim();
+}
+
+function findNetworkTemplateProfile(profileId) {
+  const selected = String(profileId || "").trim();
+  if (!selected) return null;
+  return networkTemplateProfiles.find((p) => p.id === selected) || null;
+}
+
+function profileModelLabel(profile) {
+  const p = profile && typeof profile === "object" ? profile : {};
+  const model = String(p.modelName || p.modelId || "").trim();
+  return model ? ` [${model}]` : "";
+}
+
+function selectedNetworkTemplateProfile() {
+  return findNetworkTemplateProfile(getSelectedNetworkTemplateProfileId());
+}
+
+function updateConfigNetworkProfileWarning() {
+  if (!configNetworkProfileWarningEl) return;
+  const mode = selectedMode();
+  const selected = selectedNetworkTemplateProfile();
+  if (mode !== "simplechat-api") {
+    configNetworkProfileWarningEl.textContent = "";
+    return;
+  }
+  if (!selected) {
+    configNetworkProfileWarningEl.textContent = "No network profile selected.";
+    return;
+  }
+  if (selected.exists === false) {
+    configNetworkProfileWarningEl.textContent = `Warning: profile template file is missing (${selected.networkTemplate}).`;
+    return;
+  }
+  configNetworkProfileWarningEl.textContent = "";
+}
+
+function applyNetworkTemplateProfile(profileId, options = {}) {
+  const updatePath = options.updatePath !== false;
+  const syncConfig = options.syncConfig !== false;
+  const syncSetup = options.syncSetup !== false;
+  if (!networkTemplateProfileEl) return;
+
+  const fallback = defaultNetworkTemplateProfileId || networkTemplateProfiles[0]?.id || "";
+  const effectiveId = findNetworkTemplateProfile(profileId)?.id || fallback;
+  if (syncSetup && networkTemplateProfileEl) networkTemplateProfileEl.value = effectiveId;
+  if (syncConfig && configNetworkTemplateProfileEl) configNetworkTemplateProfileEl.value = effectiveId;
+
+  const selectedProfile = findNetworkTemplateProfile(effectiveId);
+  if (selectedProfile && updatePath) {
+    setInputValue("networkTemplate", selectedProfile.networkTemplate);
+  }
+
+  if (networkProfileStatusEl) {
+    if (selectedProfile) {
+      networkProfileStatusEl.textContent = `Using profile '${selectedProfile.name}'${profileModelLabel(selectedProfile)} -> ${selectedProfile.networkTemplate}`;
+    } else {
+      networkProfileStatusEl.textContent = "No network template profile selected.";
+    }
+  }
+
+  updateConfigNetworkProfileWarning();
+}
+
+function renderNetworkTemplateProfileOptions() {
+  if (!networkTemplateProfileEl && !configNetworkTemplateProfileEl) return;
+
+  const renderFor = (el) => {
+    if (!el) return;
+    el.innerHTML = "";
+    for (const profile of networkTemplateProfiles) {
+      const opt = document.createElement("option");
+      opt.value = profile.id;
+      const isDefault = profile.id === defaultNetworkTemplateProfileId;
+      const base = isDefault ? `${profile.name} (default)` : profile.name;
+      opt.textContent = `${base}${profileModelLabel(profile)}`;
+      el.appendChild(opt);
+    }
+  };
+
+  renderFor(networkTemplateProfileEl);
+  renderFor(configNetworkTemplateProfileEl);
+
+  applyNetworkTemplateProfile(networkTemplateProfileEl.value || defaultNetworkTemplateProfileId || networkTemplateProfiles[0]?.id || "", {
+    updatePath: true,
+    syncConfig: true,
+    syncSetup: true,
+  });
+}
+
+async function loadNetworkTemplateProfiles(preferredProfileId = "") {
+  if (!networkTemplateProfileEl && !configNetworkTemplateProfileEl) return;
+  try {
+    const res = await fetch("/api/network-template-profiles");
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      throw new Error(data.error || "Failed to load network template profiles.");
+    }
+
+    networkTemplateProfiles = Array.isArray(data.profiles) ? data.profiles : [];
+    defaultNetworkTemplateProfileId = String(data.defaultProfileId || "").trim();
+    renderNetworkTemplateProfileOptions();
+    applyNetworkTemplateProfile(preferredProfileId || defaultNetworkTemplateProfileId, {
+      updatePath: true,
+      syncConfig: true,
+      syncSetup: true,
+    });
+  } catch (err) {
+    networkTemplateProfiles = [];
+    const renderUnavailable = (el) => {
+      if (!el) return;
+      el.innerHTML = "";
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "(profiles unavailable)";
+      el.appendChild(opt);
+      el.value = "";
+    };
+    renderUnavailable(networkTemplateProfileEl);
+    renderUnavailable(configNetworkTemplateProfileEl);
+    if (networkProfileStatusEl) {
+      networkProfileStatusEl.textContent = `Could not load profiles: ${err.message}`;
+    }
+  }
+}
+
+function getSelectedNetworkTemplateProfileName() {
+  const selected = selectedNetworkTemplateProfile();
+  return selected?.name || "Default";
+}
+
+async function setDefaultNetworkTemplateProfile() {
+  const selected = selectedNetworkTemplateProfile();
+  if (!selected) {
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Select a profile first.";
+    return;
+  }
+
+  if (setDefaultNetworkProfileBtn) setDefaultNetworkProfileBtn.disabled = true;
+  if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Setting default profile...";
+  try {
+    const res = await fetch("/api/network-template-profiles/set-default", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: selected.id }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      throw new Error(data.error || "Failed to set default profile.");
+    }
+
+    await loadNetworkTemplateProfiles(selected.id);
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = `Default profile set to '${selected.name}'.`;
+  } catch (err) {
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = `Set default failed: ${err.message}`;
+  } finally {
+    if (setDefaultNetworkProfileBtn) setDefaultNetworkProfileBtn.disabled = false;
+  }
+}
+
+async function deleteNetworkTemplateProfile() {
+  const selected = selectedNetworkTemplateProfile();
+  if (!selected) {
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Select a profile first.";
+    return;
+  }
+
+  const confirmed = window.confirm(`Delete network profile '${selected.name}'?`);
+  if (!confirmed) return;
+
+  if (deleteNetworkProfileBtn) deleteNetworkProfileBtn.disabled = true;
+  if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Deleting profile...";
+  try {
+    const res = await fetch("/api/network-template-profiles/delete", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: selected.id }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      throw new Error(data.error || "Failed to delete profile.");
+    }
+
+    await loadNetworkTemplateProfiles(data.defaultProfileId || "");
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = `Deleted profile '${selected.name}'.`;
+  } catch (err) {
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = `Delete failed: ${err.message}`;
+  } finally {
+    if (deleteNetworkProfileBtn) deleteNetworkProfileBtn.disabled = false;
+  }
+}
+
+async function saveNetworkTemplateProfile() {
+  const name = String(newNetworkProfileNameEl?.value || "").trim();
+  const networkTemplate = String(form.querySelector("[name='networkTemplate']")?.value || "").trim();
+  if (!name) {
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Enter a profile name first.";
+    return;
+  }
+  if (!networkTemplate) {
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Set a network template path before saving profile.";
+    return;
+  }
+
+  if (saveNetworkProfileBtn) saveNetworkProfileBtn.disabled = true;
+  if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Saving profile...";
+  try {
+    const res = await fetch("/api/network-template-profiles/upsert", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name,
+        networkTemplate,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      throw new Error(data.error || "Failed to save network template profile.");
+    }
+
+    const targetProfile = (data.profiles || []).find((p) => p.name === name);
+    await loadNetworkTemplateProfiles(targetProfile?.id || "");
+    if (newNetworkProfileNameEl) newNetworkProfileNameEl.value = "";
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = `Profile '${name}' saved.`;
+  } catch (err) {
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = `Profile save failed: ${err.message}`;
+  } finally {
+    if (saveNetworkProfileBtn) saveNetworkProfileBtn.disabled = false;
+  }
 }
 
 function parseJsonSafe(text, fallback) {
@@ -217,6 +461,8 @@ function updateModeVisibility() {
   document.querySelectorAll(".mode-simplechat").forEach((el) => {
     el.style.display = effectiveMode === "simplechat-api" ? "grid" : "none";
   });
+
+  updateConfigNetworkProfileWarning();
 }
 
 function showStep(next) {
@@ -226,6 +472,13 @@ function showStep(next) {
 
   prevBtn.disabled = step === 0;
   nextBtn.style.display = step === MAX_STEP ? "none" : "inline-block";
+}
+
+function goToStep(targetStep) {
+  const target = Math.max(0, Math.min(MAX_STEP, Number(targetStep)));
+  if (Number.isNaN(target) || target === step) return;
+  if (target > step && !validateCurrentStep()) return;
+  showStep(target);
 }
 
 function setStatus(message, cls = "") {
@@ -384,10 +637,21 @@ function setRunContext(runContext) {
 
   const model = runContext.model || "unknown";
   const mode = runContext.mode || selectedMode();
-  modelUsedEl.textContent = `Mode: ${mode} | Model: ${model}`;
+  const profileName = runContext?.network_template_profile?.name || "";
+  const profilePath = runContext?.network_template_profile?.networkTemplate || "";
+  const profileText = profileName ? ` | Profile: ${profileName}` : "";
+  modelUsedEl.textContent = `Mode: ${mode}${profileText} | Model: ${model}`;
 
   const example = runContext.exampleRequest || { note: "No example request available." };
-  apiExampleTextEl.textContent = JSON.stringify(example, null, 2);
+  apiExampleTextEl.textContent = JSON.stringify(
+    {
+      network_template_profile: profileName || "",
+      network_template_path: profilePath || "",
+      ...example,
+    },
+    null,
+    2,
+  );
 }
 
 function buildPrecheckPayload() {
@@ -398,6 +662,7 @@ function buildPrecheckPayload() {
     url: get("url"),
     stateFile: get("stateFile"),
     networkTemplate: get("networkTemplate"),
+    networkTemplateProfile: getSelectedNetworkTemplateProfileId(),
     apiUrl: get("apiUrl"),
     headed: get("headed") || "true",
   };
@@ -436,6 +701,7 @@ async function runSetupCheck(options = {}) {
     const url = form.querySelector("[name='url']")?.value || "";
     const stateFile = form.querySelector("[name='stateFile']")?.value || ".auth/storage-state.json";
     const networkTemplate = form.querySelector("[name='networkTemplate']")?.value || "outputs/network-log-ui-full.json";
+    const networkTemplateProfile = getSelectedNetworkTemplateProfileId();
 
     const res = await fetch("/api/precheck", {
       method: "POST",
@@ -445,6 +711,7 @@ async function runSetupCheck(options = {}) {
         url,
         stateFile,
         networkTemplate,
+        networkTemplateProfile,
         headed: "true",
       }),
     });
@@ -463,6 +730,7 @@ async function refreshLoginSession() {
   const url = form.querySelector("[name='url']")?.value || "";
   const stateFile = form.querySelector("[name='stateFile']")?.value || ".auth/storage-state.json";
   const networkTemplate = form.querySelector("[name='networkTemplate']")?.value || "outputs/network-log-ui-full.json";
+  const networkTemplateProfile = getSelectedNetworkTemplateProfileId();
 
   setupStatusEl.textContent = "Opening browser for sign-in. Complete login and wait for capture...";
   setupTextEl.textContent = "";
@@ -477,6 +745,7 @@ async function refreshLoginSession() {
         url,
         stateFile,
         networkTemplate,
+        networkTemplateProfile,
         timeoutSec: 300,
       }),
     });
@@ -502,6 +771,7 @@ async function importManualRequest() {
   const requestText = manualRequestTextEl?.value || "";
   const url = form.querySelector("[name='url']")?.value || "";
   const networkTemplate = form.querySelector("[name='networkTemplate']")?.value || "outputs/network-log-ui-full.json";
+  const networkTemplateProfile = getSelectedNetworkTemplateProfileId();
   if (!requestText.trim()) {
     setupStatusEl.textContent = "Paste a copied PowerShell request first.";
     return;
@@ -515,7 +785,7 @@ async function importManualRequest() {
     const res = await fetch("/api/import-network-template", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ requestText, networkTemplate, url }),
+      body: JSON.stringify({ requestText, networkTemplate, networkTemplateProfile, url }),
     });
     const data = await res.json();
     if (!res.ok || !data.ok) {
@@ -677,6 +947,7 @@ async function clearRunHistory() {
 async function rerunLastConfig() {
   setStatus("Rerunning last saved configuration...", "");
   logsEl.textContent = "";
+  logsEl.textContent = "[profile] loading from saved run config...";
   startRunProgress();
   setRunContext(null);
   setDownloads(null);
@@ -691,7 +962,8 @@ async function rerunLastConfig() {
     });
     const data = await res.json();
     const outputText = [data.command || "", data.stdout || "", data.stderr || ""].filter(Boolean).join("\n\n");
-    logsEl.textContent = outputText;
+    const runProfileName = data?.runContext?.network_template_profile?.name || "unknown";
+    logsEl.textContent = `[profile] ${runProfileName}\n\n${outputText}`;
     const stageSummary = extractStageLinesFromOutput(outputText);
     if (stageSummary.length) setRunStageLines(stageSummary);
 
@@ -701,7 +973,7 @@ async function rerunLastConfig() {
       return;
     }
 
-    setStatus("Rerun complete.", "ok");
+    setStatus(`Rerun complete. Profile: ${runProfileName}.`, "ok");
     finishRunProgress(true, "Rerun complete.");
     setDownloads(data.outputs || {});
     setRunContext(data.runContext || null);
@@ -737,6 +1009,19 @@ nextBtn.addEventListener("click", () => {
   showStep(step + 1);
 });
 
+stepEls.forEach((el) => {
+  el.setAttribute("role", "button");
+  el.setAttribute("tabindex", "0");
+  el.addEventListener("click", () => {
+    goToStep(Number(el.dataset.step));
+  });
+  el.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Enter" && ev.key !== " ") return;
+    ev.preventDefault();
+    goToStep(Number(el.dataset.step));
+  });
+});
+
 form.querySelectorAll("input[name='mode']").forEach((el) => {
   el.addEventListener("change", updateModeVisibility);
 });
@@ -745,6 +1030,15 @@ setupCheckBtn?.addEventListener("click", runSetupCheck);
 setupOpenChatEl?.addEventListener("click", refreshLoginSession);
 refreshAuthBtn?.addEventListener("click", refreshLoginSession);
 importRequestBtn?.addEventListener("click", importManualRequest);
+networkTemplateProfileEl?.addEventListener("change", () => {
+  applyNetworkTemplateProfile(networkTemplateProfileEl.value, { updatePath: true, syncConfig: true, syncSetup: true });
+});
+configNetworkTemplateProfileEl?.addEventListener("change", () => {
+  applyNetworkTemplateProfile(configNetworkTemplateProfileEl.value, { updatePath: true, syncConfig: true, syncSetup: true });
+});
+saveNetworkProfileBtn?.addEventListener("click", saveNetworkTemplateProfile);
+setDefaultNetworkProfileBtn?.addEventListener("click", setDefaultNetworkTemplateProfile);
+deleteNetworkProfileBtn?.addEventListener("click", deleteNetworkTemplateProfile);
 
 jsonlProfileEl?.addEventListener("change", updateProfileUI);
 jsonlProfileEl?.addEventListener("change", updateProfilePreview);
@@ -772,13 +1066,23 @@ form.addEventListener("submit", async (ev) => {
   const includeMetadata = Boolean(form.querySelector("input[name='includeMetadata']")?.checked);
   const strictSchema = Boolean(form.querySelector("input[name='strictSchema']")?.checked);
   const maskLogs = Boolean(form.querySelector("input[name='maskLogs']")?.checked);
+
+  const currentMode = selectedMode();
+  const selectedProfile = selectedNetworkTemplateProfile();
+  if (currentMode === "simplechat-api" && selectedProfile && selectedProfile.exists === false) {
+    setStatus(`Selected profile '${selectedProfile.name}' has a missing template file. Update or re-import before running.`, "err");
+    return;
+  }
+
   fd.set("includeGroundTruth", includeGroundTruth ? "true" : "false");
   fd.set("includeContext", includeContext ? "true" : "false");
   fd.set("includeMetadata", includeMetadata ? "true" : "false");
   fd.set("strictSchema", strictSchema ? "true" : "false");
   setStatus("Running. This may take a while...", "");
+  const selectedProfileName = getSelectedNetworkTemplateProfileName();
+  setStatus(`Running with network profile: ${selectedProfileName}. This may take a while...`, "");
   startRunProgress();
-  logsEl.textContent = "";
+  logsEl.textContent = `[profile] ${selectedProfileName}`;
   setRunContext(null);
   setDownloads(null);
   runBtn.disabled = true;
@@ -791,7 +1095,7 @@ form.addEventListener("submit", async (ev) => {
 
     const data = await res.json();
   const outputText = [data.command || "", data.stdout || "", data.stderr || ""].filter(Boolean).join("\n\n");
-  logsEl.textContent = maskLogs ? maskSensitiveText(outputText) : outputText;
+  logsEl.textContent = `[profile] ${selectedProfileName}\n\n${maskLogs ? maskSensitiveText(outputText) : outputText}`;
   const stageSummary = extractStageLinesFromOutput(outputText);
   if (stageSummary.length) setRunStageLines(stageSummary);
 
@@ -824,6 +1128,9 @@ async function initializeWizard() {
   updateModeVisibility();
   showStep(0);
   await hydrateDefaults();
+  if (!networkTemplateProfiles.length) {
+    await loadNetworkTemplateProfiles("");
+  }
   updateProfileUI();
   updateProfilePreview();
   refreshRunHistory();

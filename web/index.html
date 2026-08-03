@@ -47,15 +47,66 @@
                 <button id="setupCheckBtn" type="button" class="ghost">Check setup readiness</button>
               </div>
 
-              <details class="manual-template">
-                <summary>Import a copied request manually</summary>
-                <label class="field">
-                  <span>Paste `fetch(...)`, `Invoke-WebRequest`, or raw JSON body</span>
-                  <textarea id="manualRequestText" rows="7" placeholder="Paste fetch(...), Invoke-WebRequest, or raw JSON body"></textarea>
-                  <small>Only the /api/chat/stream URL and JSON body are saved. Cookies and headers are discarded.</small>
+              <div class="field-grid two-col setup-profile-grid">
+                <label class="field setup-profile-card">
+                  <span>Profile for setup checks and runs</span>
+                  <select id="networkTemplateProfile" name="networkTemplateProfile"></select>
+                  <small>This controls which profile Step 0 and runs use by default.</small>
+                  <small id="networkProfileStatus">Profiles load from outputs/network-template-profiles.json.</small>
                 </label>
-                <button id="importRequestBtn" type="button" class="ghost">Create network template</button>
-              </details>
+                <div class="field setup-profile-card profile-manager-summary">
+                  <span>Where profile actions live</span>
+                  <small>All profile editing actions are grouped below in <strong>Network profile manager</strong>.</small>
+                  <small>Use that section to save/update, set default, delete, and import copied requests.</small>
+                </div>
+              </div>
+
+              <section class="profile-manager-box">
+                <h3>Network profile manager</h3>
+                <p class="panel-lead">Each action below applies to the currently selected profile in the dropdown above.</p>
+
+                <div class="field-grid two-col">
+                  <label class="field">
+                    <span>Profile name (new or existing)</span>
+                    <input id="newNetworkProfileName" type="text" placeholder="Example: Claude 4.6 personal" />
+                  </label>
+                  <label class="field">
+                    <span>Template path used for save/import</span>
+                    <input id="profileTemplatePath" type="text" value="outputs/network-log-ui-full.json" />
+                  </label>
+                </div>
+
+                <div class="actions-row profile-manager-actions">
+                  <button id="saveNetworkProfileBtn" type="button" class="ghost">Save/Update profile</button>
+                  <button id="setDefaultNetworkProfileBtn" type="button" class="ghost">Set selected as default</button>
+                  <button id="deleteNetworkProfileBtn" type="button" class="ghost danger">Delete selected</button>
+                </div>
+
+                <details class="manual-template">
+                  <summary>Import copied request into selected profile</summary>
+                  <label class="field">
+                    <span>Paste `fetch(...)`, `Invoke-WebRequest`, or raw JSON body</span>
+                    <textarea id="manualRequestText" rows="7" placeholder="Paste fetch(...), Invoke-WebRequest, or raw JSON body"></textarea>
+                    <small>This updates the selected profile template and reparses model metadata from that request.</small>
+                  </label>
+                  <button id="importRequestBtn" type="button" class="ghost">Import into selected profile</button>
+                </details>
+
+                <div class="profile-table-wrap">
+                  <table class="profile-table">
+                    <thead>
+                      <tr>
+                        <th>Profile</th>
+                        <th>Model</th>
+                        <th>Template</th>
+                        <th>Default</th>
+                        <th>Exists</th>
+                      </tr>
+                    </thead>
+                    <tbody id="profileTableBody"></tbody>
+                  </table>
+                </div>
+              </section>
 
               <div id="setupStatus" class="preview-status">Setup check has not been run yet.</div>
               <pre id="setupText" class="logs small"></pre>
@@ -140,6 +191,12 @@
               <label class="field mode-simplechat">
                 <span>Network template path</span>
                 <input type="text" name="networkTemplate" value="outputs/network-log-ui-full.json" />
+              </label>
+              <label class="field mode-simplechat">
+                <span>Network template profile (for this run)</span>
+                <select id="configNetworkTemplateProfile"></select>
+                <small>Choose which saved request template profile this run should use.</small>
+                <small id="configNetworkProfileWarning" class="warn-text"></small>
               </label>
               <label class="field mode-ui">
                 <span>Selectors path</span>

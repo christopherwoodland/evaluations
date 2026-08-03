@@ -503,6 +503,26 @@ function extractCitationsFromResponseText(text) {
   return dedupeCitations(out);
 }
 
+function summarizeSimpleChatPayloadForLog(payload) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const clone = { ...source };
+
+  // Avoid huge log blobs while still showing effective request shape.
+  if (clone.model_icon && typeof clone.model_icon === "object") {
+    const icon = { ...clone.model_icon };
+    if (typeof icon.value === "string") {
+      icon.value = `[omitted data-uri, length=${icon.value.length}]`;
+    }
+    clone.model_icon = icon;
+  }
+
+  if (Array.isArray(clone.active_public_workspace_ids)) {
+    clone.active_public_workspace_ids = `[${clone.active_public_workspace_ids.length} ids]`;
+  }
+
+  return clone;
+}
+
 function shouldEnableWebSources(contextValue) {
   const text = String(contextValue || "").trim().toLowerCase();
   if (!text) return false;
@@ -815,6 +835,8 @@ function writeOutputs({ results, outputDir, baseName, jsonlOptions, metadata }) 
           status: r.status,
           error: r.error,
           captured_at_utc: r.captured_at_utc,
+          network_template_profile_id: metadata?.extra?.network_template_profile_id || "",
+          network_template_profile_name: metadata?.extra?.network_template_profile_name || "",
         };
       }
 
@@ -1466,6 +1488,7 @@ async function runSimpleChatApiMode({
     const query = String(row[queryColumn] ?? "").trim();
     const reference = String(row[referenceColumn] ?? "").trim();
     const contextValue = contextColumn ? String(row[contextColumn] ?? "").trim() : "";
+    let requestPreviewJson = "";
 
     if (!query) {
       results.push({
@@ -1473,6 +1496,7 @@ async function runSimpleChatApiMode({
         query,
         response: reference,
         context_value: contextValue,
+        request_json: requestPreviewJson,
         model_response: "",
         citations_json: "[]",
         status: "skipped",
@@ -1508,6 +1532,16 @@ async function runSimpleChatApiMode({
         conversation_id: conversationId,
       };
 
+      const requestPreview = {
+        method: "POST",
+        url: `${apiBase}/api/chat/stream`,
+        body: summarizeSimpleChatPayloadForLog(payload),
+      };
+      requestPreviewJson = JSON.stringify(requestPreview);
+      console.log(
+        `Row ${i + 1}/${rows.length}: request preview -> ${requestPreviewJson}`,
+      );
+
       const streamRes = await reqCtx.post("/api/chat/stream", {
         data: payload,
         timeout: timeoutMs,
@@ -1539,6 +1573,7 @@ async function runSimpleChatApiMode({
         query,
         response: reference,
         context_value: contextValue,
+        request_json: requestPreviewJson,
         conversation_id: conversationId,
         model_response: responseText,
         citations_json: JSON.stringify(effectiveCitations || []),
@@ -1561,6 +1596,7 @@ async function runSimpleChatApiMode({
         query,
         response: reference,
         context_value: contextValue,
+        request_json: requestPreviewJson,
         model_response: "",
         citations_json: "[]",
         status: "error",
@@ -1654,6 +1690,9 @@ async function main() {
       "run-id",
       "run-timestamp",
       "run-model",
+      "network-template-profile-id",
+      "network-template-profile-name",
+      "network-template-profile-path",
     ],
     boolean: [
       "headed",
@@ -1693,6 +1732,9 @@ async function main() {
       "run-id": "",
       "run-timestamp": "",
       "run-model": "unknown",
+      "network-template-profile-id": "",
+      "network-template-profile-name": "",
+      "network-template-profile-path": "",
     },
   });
 
@@ -1764,6 +1806,9 @@ async function main() {
       timezone: envSnapshot.timezone,
       locale: envSnapshot.locale,
       env_snapshot_json: JSON.stringify(envSnapshot),
+      network_template_profile_id: String(argv["network-template-profile-id"] || ""),
+      network_template_profile_name: String(argv["network-template-profile-name"] || ""),
+      network_template_profile_path: String(argv["network-template-profile-path"] || ""),
     },
   };
   const jsonlOptions = {

@@ -548,6 +548,10 @@ def init_state() -> None:
         st.session_state.latest_jsonl = ""
     if "run_result" not in st.session_state:
         st.session_state.run_result = None
+    if "network_template_profiles" not in st.session_state:
+        st.session_state.network_template_profiles = []
+    if "default_network_template_profile" not in st.session_state:
+        st.session_state.default_network_template_profile = ""
 
 
 def load_defaults(base_url: str) -> dict[str, Any]:
@@ -556,6 +560,47 @@ def load_defaults(base_url: str) -> dict[str, Any]:
         st.session_state.defaults = data
         return data
     return st.session_state.defaults or {}
+
+
+def load_network_template_profiles(base_url: str) -> tuple[list[dict[str, Any]], str]:
+    ok, data = api_get(base_url, "/api/network-template-profiles")
+    if not ok or not isinstance(data, dict):
+        return st.session_state.network_template_profiles or [], st.session_state.default_network_template_profile or ""
+
+    profiles = data.get("profiles") if isinstance(data.get("profiles"), list) else []
+    normalized: list[dict[str, Any]] = []
+    for profile in profiles:
+        if not isinstance(profile, dict):
+            continue
+        profile_id = str(profile.get("id") or "").strip()
+        profile_name = str(profile.get("name") or "").strip()
+        profile_template = str(profile.get("networkTemplate") or "").strip()
+        if not profile_id or not profile_name or not profile_template:
+            continue
+        normalized.append(
+            {
+                "id": profile_id,
+                "name": profile_name,
+                "networkTemplate": profile_template,
+                "description": str(profile.get("description") or "").strip(),
+                "modelId": str(profile.get("modelId") or "").strip(),
+                "modelName": str(profile.get("modelName") or "").strip(),
+            }
+        )
+
+    default_id = str(data.get("defaultProfileId") or "").strip()
+    if not default_id and normalized:
+        default_id = normalized[0]["id"]
+
+    st.session_state.network_template_profiles = normalized
+    st.session_state.default_network_template_profile = default_id
+    return normalized, default_id
+
+
+def profile_display_label(profile: dict[str, Any]) -> str:
+    name = str(profile.get("name") or profile.get("id") or "").strip()
+    model = str(profile.get("modelName") or profile.get("modelId") or "").strip()
+    return f"{name} [{model}]" if model else name
 
 
 def render_setup_check(base_url: str, settings: dict[str, Any]) -> None:
@@ -567,6 +612,7 @@ def render_setup_check(base_url: str, settings: dict[str, Any]) -> None:
             "url": settings["url"],
             "stateFile": settings["stateFile"],
             "networkTemplate": settings["networkTemplate"],
+            "networkTemplateProfile": settings.get("networkTemplateProfile", ""),
             "headed": "true",
         },
     )
@@ -588,6 +634,7 @@ def refresh_login_session(base_url: str, settings: dict[str, Any]) -> None:
         "url": settings["url"],
         "stateFile": settings["stateFile"],
         "networkTemplate": settings["networkTemplate"],
+        "networkTemplateProfile": settings.get("networkTemplateProfile", ""),
         "timeoutSec": 300,
     }
 
@@ -620,6 +667,24 @@ def render_setup_step(base_url: str, settings: dict[str, Any]) -> None:
 4. Run setup readiness check.
 """
     )
+
+    profiles = st.session_state.network_template_profiles or []
+    if profiles:
+        profile_ids = [str(p.get("id") or "") for p in profiles]
+        profile_by_id = {str(p.get("id") or ""): p for p in profiles}
+        active_profile_id = str(settings.get("networkTemplateProfile") or "")
+        default_index = profile_ids.index(active_profile_id) if active_profile_id in profile_ids else 0
+        selected_profile_id = st.selectbox(
+            "Network template profile",
+            profile_ids,
+            index=default_index,
+            format_func=lambda x: profile_display_label(profile_by_id.get(x, {})) or x,
+            key="setup_network_template_profile",
+        )
+        selected_profile = profile_by_id.get(selected_profile_id, {})
+        settings["networkTemplateProfile"] = selected_profile_id
+        settings["networkTemplate"] = str(selected_profile.get("networkTemplate") or settings["networkTemplate"])
+        st.caption(f"Active profile path: {settings['networkTemplate']}")
 
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -657,6 +722,7 @@ def render_setup_step(base_url: str, settings: dict[str, Any]) -> None:
                     {
                         "requestText": request_text,
                         "networkTemplate": settings["networkTemplate"],
+                        "networkTemplateProfile": settings.get("networkTemplateProfile", ""),
                         "url": settings["url"],
                     },
                 )
@@ -691,7 +757,7 @@ def render_mode_and_files(settings: dict[str, Any]) -> tuple[dict[str, Any], dic
     return {"mode": mode}, file_state
 
 
-def render_config(settings: dict[str, Any], mode: str) -> dict[str, Any]:
+def render_config(settings: dict[str, Any], mode: str, profiles: list[dict[str, Any]]) -> dict[str, Any]:
     st.subheader("Step 3: Run configuration")
 
     c1, c2, c3 = st.columns(3)
@@ -710,7 +776,27 @@ def render_config(settings: dict[str, Any], mode: str) -> dict[str, Any]:
     with c6:
         output_dir = st.text_input("Output directory", value=settings["outputDir"])
 
+    selected_profile_id = str(settings.get("networkTemplateProfile") or "").strip()
+    profile_ids = [str(p.get("id", "")) for p in profiles]
+    profile_by_id = {str(p.get("id", "")): p for p in profiles}
+
+    if profile_ids:
+        default_index = profile_ids.index(selected_profile_id) if selected_profile_id in profile_ids else 0
+        selected_profile_id = st.selectbox(
+            "Network template profile",
+            profile_ids,
+            index=default_index,
+            format_func=lambda x: profile_display_label(profile_by_id.get(x, {})) or x,
+        )
+        selected_profile = profile_by_id.get(selected_profile_id, {})
+        selected_template = str(selected_profile.get("networkTemplate") or settings["networkTemplate"])
+        st.caption(f"Selected profile path: {selected_template}")
+    else:
+        st.caption("No saved network template profiles found. Using explicit template path.")
+
     network_template = st.text_input("Network template path", value=settings["networkTemplate"])
+    if profile_ids and selected_profile_id in profile_by_id:
+        network_template = str(profile_by_id[selected_profile_id].get("networkTemplate") or network_template)
 
     headed = True
     new_chat = True
@@ -804,6 +890,7 @@ def render_config(settings: dict[str, Any], mode: str) -> dict[str, Any]:
         "stateFile": state_file,
         "outputDir": output_dir,
         "networkTemplate": network_template,
+        "networkTemplateProfile": selected_profile_id,
         "selectors": selectors,
         "headed": "true" if headed else "false",
         "newChat": "true" if new_chat else "false",
@@ -838,6 +925,7 @@ def render_precheck(base_url: str, mode: str, cfg: dict[str, Any]) -> None:
                 "url": cfg["url"],
                 "stateFile": cfg["stateFile"],
                 "networkTemplate": cfg["networkTemplate"],
+                "networkTemplateProfile": cfg.get("networkTemplateProfile", ""),
                 "apiUrl": cfg["apiUrl"],
                 "headed": cfg["headed"],
             },
@@ -938,6 +1026,7 @@ def run_batch(base_url: str, mode: str, cfg: dict[str, Any], file_state: dict[st
         "jsonlGroundTruthKey": cfg["jsonlGroundTruthKey"],
         "jsonlContextKey": cfg["jsonlContextKey"],
         "networkTemplate": cfg["networkTemplate"],
+        "networkTemplateProfile": cfg.get("networkTemplateProfile", ""),
         "selectors": cfg["selectors"],
         "headed": cfg["headed"],
         "newChat": cfg["newChat"],
@@ -1149,10 +1238,12 @@ def main() -> None:
     st.session_state.backend_url = backend_url.rstrip("/")
 
     defaults = load_defaults(st.session_state.backend_url)
+    profiles, default_profile_id = load_network_template_profiles(st.session_state.backend_url)
     settings = {
         "url": defaults.get("defaultChatUrl") or "https://simplechatdemo-fjgpaqe7h6c7akbr.eastus-01.azurewebsites.net/chats",
         "stateFile": defaults.get("defaultStateFile") or ".auth/storage-state.json",
         "networkTemplate": defaults.get("defaultNetworkTemplate") or "outputs/network-log-ui-full.json",
+        "networkTemplateProfile": defaults.get("defaultNetworkTemplateProfile") or default_profile_id,
         "selectors": defaults.get("defaultSelectors") or "selectors.example.json",
         "outputDir": defaults.get("defaultOutputDir") or "outputs",
         "apiUrl": defaults.get("defaultApiUrl") or "",
@@ -1170,7 +1261,7 @@ def main() -> None:
 
     st.markdown('<div id="step-config" class="anchor-target"></div>', unsafe_allow_html=True)
     with st.expander("Step 3: Config", expanded=True):
-        cfg = render_config(settings, mode_state["mode"])
+        cfg = render_config(settings, mode_state["mode"], profiles)
 
     st.markdown('<div id="step-run" class="anchor-target"></div>', unsafe_allow_html=True)
     with st.expander("Step 4: Run", expanded=True):
