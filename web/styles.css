@@ -532,6 +532,77 @@ button:disabled {
   color: #ffd2cd;
 }
 
+.run-progress {
+  margin: 0.75rem 0 0.8rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.run-progress-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.45rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.run-progress-track {
+  position: relative;
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #0f1820;
+  border: 1px solid var(--line);
+}
+
+.run-progress-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #12b3a8, #27d8ca);
+  transition: width 300ms ease, background-color 240ms ease;
+}
+
+.run-progress-fill.is-running {
+  background-image:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.04) 35%, rgba(255, 255, 255, 0.2) 70%),
+    linear-gradient(90deg, #12b3a8, #27d8ca);
+  background-size: 140px 100%, 100% 100%;
+  animation: progressShimmer 1200ms linear infinite;
+}
+
+.run-progress-fill.is-ok {
+  background: linear-gradient(90deg, #1fbf75, #4ad98f);
+}
+
+.run-progress-fill.is-err {
+  background: linear-gradient(90deg, #ff6f61, #ff9b8f);
+}
+
+.run-stage {
+  margin: 0.8rem 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.7rem;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.run-stage h4 {
+  margin: 0 0 0.5rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.run-stage .logs.small {
+  margin: 0;
+  min-height: 100px;
+}
+
 .logs {
   min-height: 190px;
   max-height: 360px;
@@ -611,5 +682,14 @@ button:disabled {
   }
   to {
     transform: translate(-15px, 14px) scale(1.06);
+  }
+}
+
+@keyframes progressShimmer {
+  from {
+    background-position: -140px 0, 0 0;
+  }
+  to {
+    background-position: 140px 0, 0 0;
   }
 }

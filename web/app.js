@@ -7,6 +7,12 @@ const runBtn = document.getElementById("runBtn");
 const rerunBtn = document.getElementById("rerunBtn");
 const statusEl = document.getElementById("status");
 const logsEl = document.getElementById("logs");
+const runProgressWrapEl = document.getElementById("runProgressWrap");
+const runProgressFillEl = document.getElementById("runProgressFill");
+const runProgressLabelEl = document.getElementById("runProgressLabel");
+const runProgressTimeEl = document.getElementById("runProgressTime");
+const runStageWrapEl = document.getElementById("runStageWrap");
+const runStageTextEl = document.getElementById("runStageText");
 const modelUsedEl = document.getElementById("modelUsed");
 const apiExampleTextEl = document.getElementById("apiExampleText");
 const downloadsEl = document.getElementById("downloads");
@@ -42,6 +48,9 @@ let step = 1;
 let latestJsonlHref = "";
 const MAX_STEP = 4;
 let hasAutoSetupRun = false;
+let runProgressTimer = null;
+let runProgressStartMs = 0;
+let runProgressValue = 0;
 
 function boolFromValue(value, fallback = false) {
   if (value == null) return fallback;
@@ -222,6 +231,125 @@ function showStep(next) {
 function setStatus(message, cls = "") {
   statusEl.className = `status ${cls}`.trim();
   statusEl.textContent = message;
+}
+
+function clearRunProgressTimer() {
+  if (!runProgressTimer) return;
+  window.clearInterval(runProgressTimer);
+  runProgressTimer = null;
+}
+
+function setRunStageLines(lines) {
+  if (!runStageWrapEl || !runStageTextEl) return;
+  const clean = Array.isArray(lines) ? lines.filter(Boolean) : [];
+  runStageWrapEl.classList.toggle("hidden", !clean.length);
+  runStageTextEl.textContent = clean.join("\n");
+}
+
+function extractStageLinesFromOutput(outputText) {
+  const text = String(outputText || "");
+  const lines = text.split(/\r?\n/);
+  const out = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (/^Mode:\s+/i.test(trimmed)) out.push(`1) ${trimmed}`);
+    else if (/^Input:\s+/i.test(trimmed)) out.push(`2) ${trimmed}`);
+    else if (/^Rows:\s+/i.test(trimmed)) out.push(`3) ${trimmed}`);
+    else if (/^Row\s+\d+\/\d+:/i.test(trimmed)) out.push(`4) ${trimmed}`);
+    else if (/^Done\.?$/i.test(trimmed)) out.push("5) Finalizing outputs");
+    else if (/^Excel output:/i.test(trimmed)) out.push("6) Excel artifact generated");
+    else if (/^JSONL output:/i.test(trimmed)) out.push("7) JSONL artifact generated");
+  }
+
+  return out.slice(-12);
+}
+
+function setRunProgressState({ visible, value, label, elapsedSec, status }) {
+  if (!runProgressWrapEl || !runProgressFillEl || !runProgressLabelEl || !runProgressTimeEl) return;
+
+  runProgressWrapEl.classList.toggle("hidden", !visible);
+  if (!visible) return;
+
+  const safeValue = Math.max(0, Math.min(100, Number(value || 0)));
+  runProgressFillEl.style.width = `${safeValue}%`;
+  runProgressFillEl.classList.remove("is-running", "is-ok", "is-err");
+  if (status === "ok") runProgressFillEl.classList.add("is-ok");
+  else if (status === "err") runProgressFillEl.classList.add("is-err");
+  else runProgressFillEl.classList.add("is-running");
+
+  runProgressLabelEl.textContent = label || "Running...";
+  runProgressTimeEl.textContent = `${Math.max(0, Number(elapsedSec || 0))}s`;
+
+  const bar = runProgressWrapEl.querySelector(".run-progress-track");
+  if (bar) bar.setAttribute("aria-valuenow", String(Math.round(safeValue)));
+}
+
+function startRunProgress() {
+  clearRunProgressTimer();
+  runProgressStartMs = Date.now();
+  runProgressValue = 4;
+  setRunProgressState({
+    visible: true,
+    value: runProgressValue,
+    label: "Submitting run...",
+    elapsedSec: 0,
+    status: "running",
+  });
+  setRunStageLines([
+    "Starting run...",
+    "Uploading input and configuration to backend",
+    "Waiting for backend runner to start",
+  ]);
+
+  runProgressTimer = window.setInterval(() => {
+    const elapsedSec = Math.floor((Date.now() - runProgressStartMs) / 1000);
+    if (runProgressValue < 92) {
+      runProgressValue = Math.min(92, runProgressValue + (elapsedSec < 20 ? 2.2 : 0.8));
+    }
+    const label = elapsedSec < 5
+      ? "Preparing request..."
+      : elapsedSec < 20
+        ? "Running prompts..."
+        : "Still running (waiting for model responses)...";
+
+    const stageLines = [
+      "Starting run...",
+      "Uploading input and configuration to backend",
+      elapsedSec < 8
+        ? "Creating conversations..."
+        : "Sending chat requests and waiting for model responses...",
+    ];
+    if (elapsedSec >= 20) {
+      stageLines.push("Processing long-running prompt(s)...");
+    }
+    setRunStageLines(stageLines);
+
+    setRunProgressState({
+      visible: true,
+      value: runProgressValue,
+      label,
+      elapsedSec,
+      status: "running",
+    });
+  }, 1000);
+}
+
+function finishRunProgress(ok, label) {
+  clearRunProgressTimer();
+  const elapsedSec = Math.floor((Date.now() - runProgressStartMs) / 1000);
+  setRunProgressState({
+    visible: true,
+    value: ok ? 100 : Math.max(8, Math.min(100, runProgressValue)),
+    label: label || (ok ? "Run complete." : "Run failed."),
+    elapsedSec,
+    status: ok ? "ok" : "err",
+  });
+  if (!ok) {
+    const prior = runStageTextEl?.textContent ? runStageTextEl.textContent.split(/\r?\n/) : [];
+    setRunStageLines([...prior, "Run ended with errors. See logs for details."]);
+  }
 }
 
 function setDownloads(outputs) {
@@ -549,6 +677,7 @@ async function clearRunHistory() {
 async function rerunLastConfig() {
   setStatus("Rerunning last saved configuration...", "");
   logsEl.textContent = "";
+  startRunProgress();
   setRunContext(null);
   setDownloads(null);
   runBtn.disabled = true;
@@ -563,19 +692,24 @@ async function rerunLastConfig() {
     const data = await res.json();
     const outputText = [data.command || "", data.stdout || "", data.stderr || ""].filter(Boolean).join("\n\n");
     logsEl.textContent = outputText;
+    const stageSummary = extractStageLinesFromOutput(outputText);
+    if (stageSummary.length) setRunStageLines(stageSummary);
 
     if (!res.ok || !data.ok) {
       setStatus(data.error || `Rerun failed (exit ${data.exitCode ?? "n/a"}).`, "err");
+      finishRunProgress(false, "Rerun failed.");
       return;
     }
 
     setStatus("Rerun complete.", "ok");
+    finishRunProgress(true, "Rerun complete.");
     setDownloads(data.outputs || {});
     setRunContext(data.runContext || null);
     await previewLatestJsonl();
     await refreshRunHistory();
   } catch (err) {
     setStatus(`Rerun failed: ${err.message}`, "err");
+    finishRunProgress(false, "Rerun failed.");
   } finally {
     runBtn.disabled = false;
     if (rerunBtn) rerunBtn.disabled = false;
@@ -643,6 +777,7 @@ form.addEventListener("submit", async (ev) => {
   fd.set("includeMetadata", includeMetadata ? "true" : "false");
   fd.set("strictSchema", strictSchema ? "true" : "false");
   setStatus("Running. This may take a while...", "");
+  startRunProgress();
   logsEl.textContent = "";
   setRunContext(null);
   setDownloads(null);
@@ -657,6 +792,8 @@ form.addEventListener("submit", async (ev) => {
     const data = await res.json();
   const outputText = [data.command || "", data.stdout || "", data.stderr || ""].filter(Boolean).join("\n\n");
   logsEl.textContent = maskLogs ? maskSensitiveText(outputText) : outputText;
+  const stageSummary = extractStageLinesFromOutput(outputText);
+  if (stageSummary.length) setRunStageLines(stageSummary);
 
     if (!res.ok || !data.ok) {
       const msg = data.error || `Run failed (exit ${data.exitCode ?? "n/a"}).`;
@@ -664,10 +801,12 @@ form.addEventListener("submit", async (ev) => {
         logsEl.textContent = msg;
       }
       setStatus(msg, "err");
+      finishRunProgress(false, "Run failed.");
       return;
     }
 
     setStatus("Run complete. Download your artifacts below.", "ok");
+    finishRunProgress(true, "Run complete.");
     setDownloads(data.outputs || {});
     setRunContext(data.runContext || null);
     await previewLatestJsonl();
@@ -675,6 +814,7 @@ form.addEventListener("submit", async (ev) => {
     foundryStatusEl.textContent = "Run complete. You can export latest JSONL to Foundry folder.";
   } catch (err) {
     setStatus(`Run failed: ${err.message}`, "err");
+    finishRunProgress(false, "Run failed.");
   } finally {
     runBtn.disabled = false;
   }

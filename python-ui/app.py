@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -885,6 +887,31 @@ def render_result_blocks(base_url: str) -> None:
         st.session_state.latest_jsonl = outputs["jsonl"]
 
 
+def extract_stage_lines(output_text: str) -> list[str]:
+    text = str(output_text or "")
+    lines = text.splitlines()
+    out: list[str] = []
+    for line in lines:
+        trimmed = line.strip()
+        if not trimmed:
+            continue
+        if trimmed.startswith("Mode:"):
+            out.append(f"1) {trimmed}")
+        elif trimmed.startswith("Input:"):
+            out.append(f"2) {trimmed}")
+        elif trimmed.startswith("Rows:"):
+            out.append(f"3) {trimmed}")
+        elif re.match(r"^Row\s+\d+/\d+:", trimmed):
+            out.append(f"4) {trimmed}")
+        elif trimmed == "Done." or trimmed == "Done":
+            out.append("5) Finalizing outputs")
+        elif trimmed.startswith("Excel output:"):
+            out.append("6) Excel artifact generated")
+        elif trimmed.startswith("JSONL output:"):
+            out.append("7) JSONL artifact generated")
+    return out[-12:]
+
+
 def run_batch(base_url: str, mode: str, cfg: dict[str, Any], file_state: dict[str, Any]) -> None:
     uploaded_input = file_state.get("input")
     if uploaded_input is None:
@@ -938,19 +965,32 @@ def run_batch(base_url: str, mode: str, cfg: dict[str, Any], file_state: dict[st
         sel = file_state["selectors"]
         files["selectorsFile"] = (sel.name, sel.getvalue(), sel.type or "application/json")
 
-    with st.spinner("Running batch..."):
-        ok, resp = api_post_form(base_url, "/api/run", data, files)
+    progress = st.progress(4, text="Starting run...")
+    stage_box = st.empty()
+    stage_box.code("Starting run...\nUploading input and configuration to backend\nWaiting for backend runner to start")
+    started = time.time()
+
+    progress.progress(12, text="Submitting run request...")
+    ok, resp = api_post_form(base_url, "/api/run", data, files)
+    elapsed = int(time.time() - started)
+    progress.progress(86 if ok and resp.get("ok") else 64, text=f"Run returned after {elapsed}s. Finalizing view...")
 
     output_text = "\n\n".join([v for v in [resp.get("command"), resp.get("stdout"), resp.get("stderr")] if v])
     if cfg["maskLogs"]:
         output_text = mask_sensitive_text(output_text)
 
+    stage_lines = extract_stage_lines(output_text)
+    if stage_lines:
+        stage_box.code("\n".join(stage_lines))
+
     if not ok or not resp.get("ok"):
+        progress.progress(100, text="Run ended with errors.")
         st.error(resp.get("error", f"Run failed (exit {resp.get('exitCode', 'n/a')})."))
         if output_text.strip():
             st.code(output_text)
         return
 
+    progress.progress(100, text="Run complete.")
     st.success("Run complete. Artifacts are ready.")
     if output_text.strip():
         with st.expander("Run logs", expanded=False):
@@ -959,19 +999,31 @@ def run_batch(base_url: str, mode: str, cfg: dict[str, Any], file_state: dict[st
 
 
 def rerun_last_config(base_url: str, mask_logs: bool) -> None:
-    with st.spinner("Rerunning last config..."):
-        ok, resp = api_post_json(base_url, "/api/rerun", {})
+    progress = st.progress(10, text="Starting rerun...")
+    stage_box = st.empty()
+    stage_box.code("Starting rerun...\nLoading last saved configuration")
+    started = time.time()
+
+    ok, resp = api_post_json(base_url, "/api/rerun", {})
+    elapsed = int(time.time() - started)
+    progress.progress(88 if ok and resp.get("ok") else 62, text=f"Rerun returned after {elapsed}s. Finalizing view...")
 
     output_text = "\n\n".join([v for v in [resp.get("command"), resp.get("stdout"), resp.get("stderr")] if v])
     if mask_logs:
         output_text = mask_sensitive_text(output_text)
 
+    stage_lines = extract_stage_lines(output_text)
+    if stage_lines:
+        stage_box.code("\n".join(stage_lines))
+
     if not ok or not resp.get("ok"):
+        progress.progress(100, text="Rerun ended with errors.")
         st.error(resp.get("error", f"Rerun failed (exit {resp.get('exitCode', 'n/a')})."))
         if output_text.strip():
             st.code(output_text)
         return
 
+    progress.progress(100, text="Rerun complete.")
     st.success("Rerun complete.")
     if output_text.strip():
         with st.expander("Rerun logs", expanded=False):

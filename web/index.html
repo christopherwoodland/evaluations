@@ -268,6 +268,20 @@
             <button id="rerunBtn" type="button" class="ghost run-secondary">Rerun Last Config</button>
 
             <div id="status" class="status" role="status" aria-live="polite">Ready.</div>
+            <div id="runProgressWrap" class="run-progress hidden" aria-live="polite">
+              <div class="run-progress-head">
+                <span id="runProgressLabel">Preparing run...</span>
+                <span id="runProgressTime">0s</span>
+              </div>
+              <div class="run-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Run progress">
+                <div id="runProgressFill" class="run-progress-fill"></div>
+              </div>
+            </div>
+
+            <div id="runStageWrap" class="run-stage hidden" aria-live="polite">
+              <h4>Process stage</h4>
+              <pre id="runStageText" class="logs small"></pre>
+            </div>
             <pre id="logs" class="logs"></pre>
 
             <div class="preview-box">
