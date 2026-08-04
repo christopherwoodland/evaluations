@@ -1,0 +1,2 @@
+query,response,sources_json
+"Tell me about bullets","Example expected answer","[{""title"":""WRA Co Primer and Bullet Help"",""url"":""https://cartridge-corner.com/wrahelp.htm"",""ref_path"":""wra_primer_bullet_help.json"",""pages"":""Pages 2-3"",""scope"":""personal document scope""},{""title"":""Common Bullet Types"",""url"":""https://cartridge-corner.com/Bullets.html"",""ref_path"":""common_bullet_types.json"",""pages"":""Page 1"",""scope"":""personal document scope""}]"

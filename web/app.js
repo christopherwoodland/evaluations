@@ -36,13 +36,24 @@ const setupCheckBtn = document.getElementById("setupCheckBtn");
 const networkTemplateProfileEl = document.getElementById("networkTemplateProfile");
 const configNetworkTemplateProfileEl = document.getElementById("configNetworkTemplateProfile");
 const newNetworkProfileNameEl = document.getElementById("newNetworkProfileName");
-const saveNetworkProfileBtn = document.getElementById("saveNetworkProfileBtn");
+const profileTemplatePathEl = document.getElementById("profileTemplatePath");
+const managerModeBadgeEl = document.getElementById("managerModeBadge");
+const managerSelectedProfileTextEl = document.getElementById("managerSelectedProfileText");
+const newNetworkProfileBtn = document.getElementById("newNetworkProfileBtn");
+const createNetworkProfileBtn = document.getElementById("createNetworkProfileBtn");
+const updateNetworkProfileBtn = document.getElementById("updateNetworkProfileBtn");
+const confirmDeleteProfileEl = document.getElementById("confirmDeleteProfile");
+const profileTableBodyEl = document.getElementById("profileTableBody");
 const setDefaultNetworkProfileBtn = document.getElementById("setDefaultNetworkProfileBtn");
 const deleteNetworkProfileBtn = document.getElementById("deleteNetworkProfileBtn");
 const networkProfileStatusEl = document.getElementById("networkProfileStatus");
 const configNetworkProfileWarningEl = document.getElementById("configNetworkProfileWarning");
 const manualRequestTextEl = document.getElementById("manualRequestText");
+const currentProfileRequestTextEl = document.getElementById("currentProfileRequestText");
+const currentProfileRequestSourceEl = document.getElementById("currentProfileRequestSource");
 const importRequestBtn = document.getElementById("importRequestBtn");
+const importProfileDetailsEl = document.getElementById("importProfileDetails");
+const importAutoSyncHintEl = document.getElementById("importAutoSyncHint");
 const setupStatusEl = document.getElementById("setupStatus");
 const setupTextEl = document.getElementById("setupText");
 const precheckBtn = document.getElementById("precheckBtn");
@@ -54,13 +65,17 @@ const foundryStatusEl = document.getElementById("foundryStatus");
 
 let step = 1;
 let latestJsonlHref = "";
-const MAX_STEP = 4;
+const MAX_STEP = 6;
 let hasAutoSetupRun = false;
 let runProgressTimer = null;
 let runProgressStartMs = 0;
 let runProgressValue = 0;
 let networkTemplateProfiles = [];
 let defaultNetworkTemplateProfileId = "";
+let managerSelectedProfileId = "";
+let managerMode = "edit";
+let importRequestTextDirty = false;
+let importRequestTextProfileId = "";
 
 function boolFromValue(value, fallback = false) {
   if (value == null) return fallback;
@@ -139,8 +154,20 @@ function setInputValue(name, value) {
   el.value = String(value);
 }
 
-function getSelectedNetworkTemplateProfileId() {
-  return String(configNetworkTemplateProfileEl?.value || networkTemplateProfileEl?.value || "").trim();
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function getSelectedNetworkTemplateProfileId(source = "setup") {
+  if (source === "config") {
+    return String(configNetworkTemplateProfileEl?.value || networkTemplateProfileEl?.value || "").trim();
+  }
+  return String(networkTemplateProfileEl?.value || configNetworkTemplateProfileEl?.value || "").trim();
 }
 
 function findNetworkTemplateProfile(profileId) {
@@ -155,14 +182,231 @@ function profileModelLabel(profile) {
   return model ? ` [${model}]` : "";
 }
 
-function selectedNetworkTemplateProfile() {
-  return findNetworkTemplateProfile(getSelectedNetworkTemplateProfileId());
+function renderProfileTable() {
+  if (!profileTableBodyEl) return;
+  if (!networkTemplateProfiles.length) {
+    profileTableBodyEl.innerHTML = "<tr><td colspan='6'>No profiles found.</td></tr>";
+    return;
+  }
+
+  profileTableBodyEl.innerHTML = networkTemplateProfiles
+    .map((profile) => {
+      const profileName = escapeHtml(profile.name || profile.id || "");
+      const profileId = escapeHtml(profile.id || "");
+      const model = escapeHtml(profile.modelName || profile.modelId || "-");
+      const templatePath = escapeHtml(profile.networkTemplate || "");
+      const isDefault = profile.id === defaultNetworkTemplateProfileId ? "Yes" : "";
+      const exists = profile.exists === false ? "No" : "Yes";
+      const checked = profile.id === managerSelectedProfileId ? "checked" : "";
+      const rowClass = profile.id === managerSelectedProfileId ? "is-selected" : "";
+      return `<tr class='${rowClass}' data-profile-id='${profileId}'>
+        <td><input type='checkbox' class='profile-delete-checkbox' data-profile-id='${profileId}' ${checked} /></td>
+        <td>${profileName}</td>
+        <td>${model}</td>
+        <td>${templatePath}</td>
+        <td>${escapeHtml(isDefault)}</td>
+        <td>${escapeHtml(exists)}</td>
+      </tr>`;
+    })
+    .join("");
+}
+
+function updateManagerUiState() {
+  if (managerModeBadgeEl) {
+    managerModeBadgeEl.textContent = managerMode === "create" ? "Creating new profile" : "Editing selected profile";
+  }
+
+  if (managerSelectedProfileTextEl) {
+    const selected = findNetworkTemplateProfile(managerSelectedProfileId);
+    if (selected) {
+      managerSelectedProfileTextEl.textContent = `Selected profile: ${selected.name}${profileModelLabel(selected)}`;
+    } else {
+      managerSelectedProfileTextEl.textContent = "Selected profile: none";
+    }
+  }
+
+  const hasSelected = Boolean(findNetworkTemplateProfile(managerSelectedProfileId));
+  if (createNetworkProfileBtn) createNetworkProfileBtn.disabled = managerMode !== "create";
+  if (updateNetworkProfileBtn) updateNetworkProfileBtn.disabled = managerMode !== "edit" || !hasSelected;
+  if (setDefaultNetworkProfileBtn) setDefaultNetworkProfileBtn.disabled = !hasSelected;
+  if (deleteNetworkProfileBtn) {
+    const deleteConfirmed = Boolean(confirmDeleteProfileEl?.checked);
+    deleteNetworkProfileBtn.disabled = !hasSelected || !deleteConfirmed;
+  }
+}
+
+function selectManagerProfile(profileId, options = {}) {
+  const profile = findNetworkTemplateProfile(profileId);
+  if (!profile) return;
+
+  managerSelectedProfileId = profile.id;
+  managerMode = "edit";
+
+  if (newNetworkProfileNameEl) newNetworkProfileNameEl.value = profile.name || "";
+  if (profileTemplatePathEl) profileTemplatePathEl.value = profile.networkTemplate || "";
+  if (confirmDeleteProfileEl) confirmDeleteProfileEl.checked = false;
+
+  if (options.syncSelectors !== false) {
+    if (networkTemplateProfileEl) networkTemplateProfileEl.value = profile.id;
+    if (configNetworkTemplateProfileEl) configNetworkTemplateProfileEl.value = profile.id;
+    setInputValue("networkTemplate", profile.networkTemplate || "");
+  }
+
+  renderProfileTable();
+  updateManagerUiState();
+  syncImportRequestTextFromProfile(profile);
+}
+
+function enterCreateProfileMode() {
+  managerMode = "create";
+  managerSelectedProfileId = "";
+  if (newNetworkProfileNameEl) newNetworkProfileNameEl.value = "";
+  if (confirmDeleteProfileEl) confirmDeleteProfileEl.checked = false;
+  if (profileTemplatePathEl && !String(profileTemplatePathEl.value || "").trim()) {
+    profileTemplatePathEl.value = form.querySelector("[name='networkTemplate']")?.value || "outputs/network-log-ui-full.json";
+  }
+  if (networkProfileStatusEl) {
+    networkProfileStatusEl.textContent = "Profile manager: create mode enabled. Enter a new profile name and path.";
+  }
+  renderProfileTable();
+  updateManagerUiState();
+}
+
+function ensureImportProfileLoaded() {
+  const selected =
+    findNetworkTemplateProfile(managerSelectedProfileId) ||
+    selectedNetworkTemplateProfile("setup") ||
+    networkTemplateProfiles[0] ||
+    null;
+
+  if (!selected) {
+    if (setupStatusEl) setupStatusEl.textContent = "No profile available for import target.";
+    if (importAutoSyncHintEl) {
+      importAutoSyncHintEl.textContent = "[Auto-synced] No selected profile available for import.";
+    }
+    if (currentProfileRequestTextEl) {
+      currentProfileRequestTextEl.value = "";
+    }
+    if (currentProfileRequestSourceEl) {
+      currentProfileRequestSourceEl.textContent = "Source: no profile selected.";
+    }
+    return null;
+  }
+
+  selectManagerProfile(selected.id, { syncSelectors: true });
+  if (setupStatusEl) {
+    setupStatusEl.textContent = `Import target: '${selected.name}'${profileModelLabel(selected)} -> ${selected.networkTemplate}`;
+  }
+  if (importAutoSyncHintEl) {
+    importAutoSyncHintEl.textContent = `[Auto-synced] Import target: ${selected.name}${profileModelLabel(selected)} -> ${selected.networkTemplate}`;
+  }
+  syncImportRequestTextFromProfile(selected, { force: true });
+  return selected;
+}
+
+async function syncImportRequestTextFromProfile(profile, options = {}) {
+  if (!profile || !manualRequestTextEl) return;
+
+  const force = options.force === true;
+  const hasText = Boolean(String(manualRequestTextEl.value || "").trim());
+  const shouldOverwriteManualText =
+    force ||
+    !hasText ||
+    (!importRequestTextDirty && importRequestTextProfileId && importRequestTextProfileId !== profile.id) ||
+    importRequestTextProfileId === profile.id;
+
+  try {
+    const preview = await loadProfileRequestPreview(profile);
+    const requestText = String(preview.requestText || "");
+    if (currentProfileRequestTextEl) {
+      currentProfileRequestTextEl.value = requestText;
+    }
+    if (currentProfileRequestSourceEl) {
+      const source = String(preview.source || "template");
+      currentProfileRequestSourceEl.textContent = `Source: ${source} (${profile.networkTemplate || ""})`;
+    }
+
+    if (shouldOverwriteManualText) {
+      manualRequestTextEl.value = requestText;
+      importRequestTextDirty = false;
+    }
+    importRequestTextProfileId = profile.id;
+  } catch (err) {
+    if (currentProfileRequestTextEl) {
+      currentProfileRequestTextEl.value = "";
+    }
+    if (currentProfileRequestSourceEl) {
+      currentProfileRequestSourceEl.textContent = `Source: failed to load (${profile.networkTemplate || ""})`;
+    }
+    if (setupStatusEl) {
+      setupStatusEl.textContent = `Could not auto-load request text for '${profile.name}': ${err.message}`;
+    }
+  }
+}
+
+async function loadProfileRequestPreview(profile) {
+  const profileId = String(profile?.id || "").trim();
+  const templatePath = String(profile?.networkTemplate || "").trim();
+  const encodedProfileId = encodeURIComponent(profileId);
+
+  try {
+    const res = await fetch(`/api/network-template-profile-request?profileId=${encodedProfileId}`);
+    const data = await res.json();
+    if (res.ok && data?.ok) {
+      return {
+        source: String(data.source || "api.profile-request"),
+        requestText: String(data.requestText || ""),
+      };
+    }
+  } catch {
+    // Fallback below handles older backend instances and temporary route errors.
+  }
+
+  if (!templatePath) {
+    throw new Error("Selected profile has no template path.");
+  }
+
+  const templateRes = await fetch(`/${templatePath.replace(/^\/+/, "")}`);
+  if (!templateRes.ok) {
+    throw new Error(`Template fetch failed (HTTP ${templateRes.status}).`);
+  }
+
+  const raw = await templateRes.text();
+  return parseTemplatePreviewFromRaw(raw);
+}
+
+function parseTemplatePreviewFromRaw(rawText) {
+  const raw = String(rawText || "");
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return { source: "template.json", requestText: JSON.stringify(parsed, null, 2) };
+    }
+
+    const req = parsed.find((e) => e?.kind === "request" && typeof e?.postData === "string" && String(e.postData).trim());
+    if (!req?.postData) {
+      return { source: "template.events", requestText: JSON.stringify(parsed, null, 2) };
+    }
+
+    const postData = String(req.postData || "").trim();
+    try {
+      return { source: "request.postData.json", requestText: JSON.stringify(JSON.parse(postData), null, 2) };
+    } catch {
+      return { source: "request.postData.raw", requestText: postData };
+    }
+  } catch {
+    return { source: "template.raw", requestText: raw };
+  }
+}
+
+function selectedNetworkTemplateProfile(source = "setup") {
+  return findNetworkTemplateProfile(getSelectedNetworkTemplateProfileId(source));
 }
 
 function updateConfigNetworkProfileWarning() {
   if (!configNetworkProfileWarningEl) return;
   const mode = selectedMode();
-  const selected = selectedNetworkTemplateProfile();
+  const selected = selectedNetworkTemplateProfile("config");
   if (mode !== "simplechat-api") {
     configNetworkProfileWarningEl.textContent = "";
     return;
@@ -192,6 +436,7 @@ function applyNetworkTemplateProfile(profileId, options = {}) {
   const selectedProfile = findNetworkTemplateProfile(effectiveId);
   if (selectedProfile && updatePath) {
     setInputValue("networkTemplate", selectedProfile.networkTemplate);
+    if (profileTemplatePathEl && managerMode !== "create") profileTemplatePathEl.value = selectedProfile.networkTemplate || "";
   }
 
   if (networkProfileStatusEl) {
@@ -203,6 +448,13 @@ function applyNetworkTemplateProfile(profileId, options = {}) {
   }
 
   updateConfigNetworkProfileWarning();
+  if (managerMode !== "create") {
+    managerSelectedProfileId = effectiveId;
+    if (newNetworkProfileNameEl && selectedProfile) newNetworkProfileNameEl.value = selectedProfile.name || "";
+    if (selectedProfile) syncImportRequestTextFromProfile(selectedProfile);
+  }
+  renderProfileTable();
+  updateManagerUiState();
 }
 
 function renderNetworkTemplateProfileOptions() {
@@ -265,22 +517,28 @@ async function loadNetworkTemplateProfiles(preferredProfileId = "") {
       networkProfileStatusEl.textContent = `Could not load profiles: ${err.message}`;
     }
   }
+
+  if (!findNetworkTemplateProfile(managerSelectedProfileId)) {
+    managerSelectedProfileId = preferredProfileId || defaultNetworkTemplateProfileId || networkTemplateProfiles[0]?.id || "";
+  }
+  renderProfileTable();
+  updateManagerUiState();
 }
 
 function getSelectedNetworkTemplateProfileName() {
-  const selected = selectedNetworkTemplateProfile();
+  const selected = selectedNetworkTemplateProfile("config");
   return selected?.name || "Default";
 }
 
 async function setDefaultNetworkTemplateProfile() {
-  const selected = selectedNetworkTemplateProfile();
+  const selected = findNetworkTemplateProfile(managerSelectedProfileId);
   if (!selected) {
-    if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Select a profile first.";
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Select one profile checkbox first.";
     return;
   }
 
   if (setDefaultNetworkProfileBtn) setDefaultNetworkProfileBtn.disabled = true;
-  if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Setting default profile...";
+  if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Profile manager: setting default profile...";
   try {
     const res = await fetch("/api/network-template-profiles/set-default", {
       method: "POST",
@@ -293,18 +551,22 @@ async function setDefaultNetworkTemplateProfile() {
     }
 
     await loadNetworkTemplateProfiles(selected.id);
-    if (networkProfileStatusEl) networkProfileStatusEl.textContent = `Default profile set to '${selected.name}'.`;
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = `Profile manager: default profile set to '${selected.name}'.`;
   } catch (err) {
-    if (networkProfileStatusEl) networkProfileStatusEl.textContent = `Set default failed: ${err.message}`;
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = `Profile manager: set default failed: ${err.message}`;
   } finally {
     if (setDefaultNetworkProfileBtn) setDefaultNetworkProfileBtn.disabled = false;
   }
 }
 
 async function deleteNetworkTemplateProfile() {
-  const selected = selectedNetworkTemplateProfile();
+  const selected = findNetworkTemplateProfile(managerSelectedProfileId);
   if (!selected) {
-    if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Select a profile first.";
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Select one profile checkbox first.";
+    return;
+  }
+  if (!confirmDeleteProfileEl?.checked) {
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Check delete confirmation first.";
     return;
   }
 
@@ -312,7 +574,7 @@ async function deleteNetworkTemplateProfile() {
   if (!confirmed) return;
 
   if (deleteNetworkProfileBtn) deleteNetworkProfileBtn.disabled = true;
-  if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Deleting profile...";
+  if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Profile manager: deleting profile...";
   try {
     const res = await fetch("/api/network-template-profiles/delete", {
       method: "POST",
@@ -325,17 +587,30 @@ async function deleteNetworkTemplateProfile() {
     }
 
     await loadNetworkTemplateProfiles(data.defaultProfileId || "");
-    if (networkProfileStatusEl) networkProfileStatusEl.textContent = `Deleted profile '${selected.name}'.`;
+    managerSelectedProfileId = String(data.defaultProfileId || "").trim();
+    managerMode = "edit";
+    if (confirmDeleteProfileEl) confirmDeleteProfileEl.checked = false;
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = `Profile manager: deleted profile '${selected.name}'.`;
   } catch (err) {
-    if (networkProfileStatusEl) networkProfileStatusEl.textContent = `Delete failed: ${err.message}`;
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = `Profile manager: delete failed: ${err.message}`;
   } finally {
     if (deleteNetworkProfileBtn) deleteNetworkProfileBtn.disabled = false;
   }
 }
 
-async function saveNetworkTemplateProfile() {
+function profileExistsByName(name, excludeId = "") {
+  const normalized = String(name || "").trim().toLowerCase();
+  const excluded = String(excludeId || "").trim();
+  return networkTemplateProfiles.some((p) => {
+    const pid = String(p.id || "").trim();
+    const pname = String(p.name || "").trim().toLowerCase();
+    return pid !== excluded && pname === normalized;
+  });
+}
+
+async function createNetworkTemplateProfile() {
   const name = String(newNetworkProfileNameEl?.value || "").trim();
-  const networkTemplate = String(form.querySelector("[name='networkTemplate']")?.value || "").trim();
+  const networkTemplate = String(profileTemplatePathEl?.value || form.querySelector("[name='networkTemplate']")?.value || "").trim();
   if (!name) {
     if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Enter a profile name first.";
     return;
@@ -344,9 +619,13 @@ async function saveNetworkTemplateProfile() {
     if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Set a network template path before saving profile.";
     return;
   }
+  if (profileExistsByName(name)) {
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Profile manager: name already exists. Select it and use Update selected profile.";
+    return;
+  }
 
-  if (saveNetworkProfileBtn) saveNetworkProfileBtn.disabled = true;
-  if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Saving profile...";
+  if (createNetworkProfileBtn) createNetworkProfileBtn.disabled = true;
+  if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Profile manager: saving profile...";
   try {
     const res = await fetch("/api/network-template-profiles/upsert", {
       method: "POST",
@@ -363,12 +642,66 @@ async function saveNetworkTemplateProfile() {
 
     const targetProfile = (data.profiles || []).find((p) => p.name === name);
     await loadNetworkTemplateProfiles(targetProfile?.id || "");
-    if (newNetworkProfileNameEl) newNetworkProfileNameEl.value = "";
-    if (networkProfileStatusEl) networkProfileStatusEl.textContent = `Profile '${name}' saved.`;
+    if (targetProfile) {
+      managerSelectedProfileId = targetProfile.id;
+      selectManagerProfile(targetProfile.id);
+    }
+    managerMode = "edit";
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = `Profile manager: profile '${name}' saved.`;
   } catch (err) {
-    if (networkProfileStatusEl) networkProfileStatusEl.textContent = `Profile save failed: ${err.message}`;
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = `Profile manager: save failed: ${err.message}`;
   } finally {
-    if (saveNetworkProfileBtn) saveNetworkProfileBtn.disabled = false;
+    if (createNetworkProfileBtn) createNetworkProfileBtn.disabled = false;
+    updateManagerUiState();
+  }
+}
+
+async function updateNetworkTemplateProfile() {
+  const selected = findNetworkTemplateProfile(managerSelectedProfileId);
+  const name = String(newNetworkProfileNameEl?.value || "").trim();
+  const networkTemplate = String(profileTemplatePathEl?.value || form.querySelector("[name='networkTemplate']")?.value || "").trim();
+  if (!selected) {
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Select one profile checkbox first.";
+    return;
+  }
+  if (!name) {
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Enter a profile name first.";
+    return;
+  }
+  if (!networkTemplate) {
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Set a network template path before updating profile.";
+    return;
+  }
+  if (profileExistsByName(name, selected.id)) {
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Profile manager: another profile already uses that name.";
+    return;
+  }
+
+  if (updateNetworkProfileBtn) updateNetworkProfileBtn.disabled = true;
+  if (networkProfileStatusEl) networkProfileStatusEl.textContent = "Profile manager: updating selected profile...";
+  try {
+    const res = await fetch("/api/network-template-profiles/upsert", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: selected.id,
+        name,
+        networkTemplate,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      throw new Error(data.error || "Failed to update network template profile.");
+    }
+
+    await loadNetworkTemplateProfiles(selected.id);
+    selectManagerProfile(selected.id);
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = `Profile manager: profile '${name}' updated.`;
+  } catch (err) {
+    if (networkProfileStatusEl) networkProfileStatusEl.textContent = `Profile manager: update failed: ${err.message}`;
+  } finally {
+    if (updateNetworkProfileBtn) updateNetworkProfileBtn.disabled = false;
+    updateManagerUiState();
   }
 }
 
@@ -624,7 +957,6 @@ function setDownloads(outputs) {
   downloadsEl.classList.toggle("hidden", !hasAny);
   latestJsonlHref = outputs?.jsonl ? `/${outputs.jsonl}` : "";
   if (previewBtn) previewBtn.disabled = !latestJsonlHref;
-  if (exportFoundryBtn) exportFoundryBtn.disabled = !latestJsonlHref;
 }
 
 function setRunContext(runContext) {
@@ -770,14 +1102,19 @@ async function refreshLoginSession() {
 async function importManualRequest() {
   const requestText = manualRequestTextEl?.value || "";
   const url = form.querySelector("[name='url']")?.value || "";
-  const networkTemplate = form.querySelector("[name='networkTemplate']")?.value || "outputs/network-log-ui-full.json";
-  const networkTemplateProfile = getSelectedNetworkTemplateProfileId();
+  const selectedProfile = ensureImportProfileLoaded();
+  const networkTemplate = profileTemplatePathEl?.value || form.querySelector("[name='networkTemplate']")?.value || "outputs/network-log-ui-full.json";
+  const networkTemplateProfile = String(selectedProfile?.id || managerSelectedProfileId || "").trim();
+  if (!networkTemplateProfile) {
+    setupStatusEl.textContent = "Select one profile checkbox first (Step 1).";
+    return;
+  }
   if (!requestText.trim()) {
     setupStatusEl.textContent = "Paste a copied PowerShell request first.";
     return;
   }
 
-  setupStatusEl.textContent = "Extracting request template...";
+  setupStatusEl.textContent = "Profile manager: importing request into selected profile...";
   setupTextEl.textContent = "";
   if (importRequestBtn) importRequestBtn.disabled = true;
 
@@ -794,7 +1131,10 @@ async function importManualRequest() {
     }
 
     manualRequestTextEl.value = "";
+    importRequestTextDirty = false;
+    importRequestTextProfileId = "";
     setupStatusEl.textContent = data.message;
+    await loadNetworkTemplateProfiles(getSelectedNetworkTemplateProfileId("setup"));
     await runSetupCheck({ source: "manual-import" });
   } catch (err) {
     setupStatusEl.textContent = `Request import failed: ${err.message}`;
@@ -828,6 +1168,7 @@ async function runPrecheck() {
 }
 
 async function exportLatestToFoundry() {
+  if (!foundryStatusEl || !foundryTargetDirEl) return;
   if (!latestJsonlHref) return;
   foundryStatusEl.textContent = "Exporting...";
   try {
@@ -993,7 +1334,7 @@ function validateCurrentStep() {
     setStatus("Continue to mode selection once setup is ready.");
     return true;
   }
-  if (step !== 2) return true;
+  if (step !== 3) return true;
   const input = form.querySelector("input[name='inputFile']");
   if (!input?.files?.length) {
     setStatus("Please upload an input spreadsheet before continuing.", "err");
@@ -1030,15 +1371,54 @@ setupCheckBtn?.addEventListener("click", runSetupCheck);
 setupOpenChatEl?.addEventListener("click", refreshLoginSession);
 refreshAuthBtn?.addEventListener("click", refreshLoginSession);
 importRequestBtn?.addEventListener("click", importManualRequest);
+importProfileDetailsEl?.addEventListener("toggle", () => {
+  if (!importProfileDetailsEl.open) return;
+  ensureImportProfileLoaded();
+});
+manualRequestTextEl?.addEventListener("focus", () => {
+  ensureImportProfileLoaded();
+});
+manualRequestTextEl?.addEventListener("input", () => {
+  importRequestTextDirty = true;
+});
 networkTemplateProfileEl?.addEventListener("change", () => {
   applyNetworkTemplateProfile(networkTemplateProfileEl.value, { updatePath: true, syncConfig: true, syncSetup: true });
 });
 configNetworkTemplateProfileEl?.addEventListener("change", () => {
   applyNetworkTemplateProfile(configNetworkTemplateProfileEl.value, { updatePath: true, syncConfig: true, syncSetup: true });
 });
-saveNetworkProfileBtn?.addEventListener("click", saveNetworkTemplateProfile);
+newNetworkProfileBtn?.addEventListener("click", enterCreateProfileMode);
+createNetworkProfileBtn?.addEventListener("click", createNetworkTemplateProfile);
+updateNetworkProfileBtn?.addEventListener("click", updateNetworkTemplateProfile);
 setDefaultNetworkProfileBtn?.addEventListener("click", setDefaultNetworkTemplateProfile);
 deleteNetworkProfileBtn?.addEventListener("click", deleteNetworkTemplateProfile);
+confirmDeleteProfileEl?.addEventListener("change", updateManagerUiState);
+profileTableBodyEl?.addEventListener("change", (ev) => {
+  const target = ev.target;
+  if (!(target instanceof HTMLInputElement)) return;
+  if (!target.classList.contains("profile-delete-checkbox")) return;
+  const id = String(target.dataset.profileId || "").trim();
+  if (!id) return;
+
+  if (!target.checked) {
+    managerSelectedProfileId = "";
+    managerMode = "create";
+    renderProfileTable();
+    updateManagerUiState();
+    return;
+  }
+  selectManagerProfile(id, { syncSelectors: true });
+});
+profileTableBodyEl?.addEventListener("click", (ev) => {
+  const target = ev.target;
+  if (!(target instanceof Element)) return;
+  if (target.classList.contains("profile-delete-checkbox")) return;
+  const row = target.closest("tr[data-profile-id]");
+  if (!row) return;
+  const id = String(row.getAttribute("data-profile-id") || "").trim();
+  if (!id) return;
+  selectManagerProfile(id, { syncSelectors: true });
+});
 
 jsonlProfileEl?.addEventListener("change", updateProfileUI);
 jsonlProfileEl?.addEventListener("change", updateProfilePreview);
@@ -1115,7 +1495,9 @@ form.addEventListener("submit", async (ev) => {
     setRunContext(data.runContext || null);
     await previewLatestJsonl();
     await refreshRunHistory();
-    foundryStatusEl.textContent = "Run complete. You can export latest JSONL to Foundry folder.";
+    if (foundryStatusEl) {
+      foundryStatusEl.textContent = "Run complete. You can export latest JSONL to Foundry folder.";
+    }
   } catch (err) {
     setStatus(`Run failed: ${err.message}`, "err");
     finishRunProgress(false, "Run failed.");
@@ -1130,6 +1512,12 @@ async function initializeWizard() {
   await hydrateDefaults();
   if (!networkTemplateProfiles.length) {
     await loadNetworkTemplateProfiles("");
+  }
+  managerSelectedProfileId = getSelectedNetworkTemplateProfileId("setup");
+  if (managerSelectedProfileId) {
+    selectManagerProfile(managerSelectedProfileId, { syncSelectors: true });
+  } else {
+    updateManagerUiState();
   }
   updateProfileUI();
   updateProfilePreview();

@@ -22,10 +22,12 @@
       <section class="wizard-card">
         <div class="steps" aria-label="Wizard steps">
           <div class="step is-active" data-step="0"><span>0</span> Setup</div>
-          <div class="step" data-step="1"><span>1</span> Mode</div>
-          <div class="step" data-step="2"><span>2</span> Files</div>
-          <div class="step" data-step="3"><span>3</span> Config</div>
-          <div class="step" data-step="4"><span>4</span> Run</div>
+          <div class="step" data-step="1"><span>1</span> Profiles</div>
+          <div class="step" data-step="2"><span>2</span> Mode</div>
+          <div class="step" data-step="3"><span>3</span> Files</div>
+          <div class="step" data-step="4"><span>4</span> Config</div>
+          <div class="step" data-step="5"><span>5</span> Run</div>
+          <div class="step" data-step="6"><span>6</span> History</div>
         </div>
 
         <form id="wizardForm" class="wizard-form">
@@ -56,57 +58,10 @@
                 </label>
                 <div class="field setup-profile-card profile-manager-summary">
                   <span>Where profile actions live</span>
-                  <small>All profile editing actions are grouped below in <strong>Network profile manager</strong>.</small>
-                  <small>Use that section to save/update, set default, delete, and import copied requests.</small>
+                  <small>Profile creation, editing, and deletes now live in <strong>Step 1: Profiles</strong>.</small>
+                  <small>Use Step 1 to create new profiles, select delete targets, and import copied requests.</small>
                 </div>
               </div>
-
-              <section class="profile-manager-box">
-                <h3>Network profile manager</h3>
-                <p class="panel-lead">Each action below applies to the currently selected profile in the dropdown above.</p>
-
-                <div class="field-grid two-col">
-                  <label class="field">
-                    <span>Profile name (new or existing)</span>
-                    <input id="newNetworkProfileName" type="text" placeholder="Example: Claude 4.6 personal" />
-                  </label>
-                  <label class="field">
-                    <span>Template path used for save/import</span>
-                    <input id="profileTemplatePath" type="text" value="outputs/network-log-ui-full.json" />
-                  </label>
-                </div>
-
-                <div class="actions-row profile-manager-actions">
-                  <button id="saveNetworkProfileBtn" type="button" class="ghost">Save/Update profile</button>
-                  <button id="setDefaultNetworkProfileBtn" type="button" class="ghost">Set selected as default</button>
-                  <button id="deleteNetworkProfileBtn" type="button" class="ghost danger">Delete selected</button>
-                </div>
-
-                <details class="manual-template">
-                  <summary>Import copied request into selected profile</summary>
-                  <label class="field">
-                    <span>Paste `fetch(...)`, `Invoke-WebRequest`, or raw JSON body</span>
-                    <textarea id="manualRequestText" rows="7" placeholder="Paste fetch(...), Invoke-WebRequest, or raw JSON body"></textarea>
-                    <small>This updates the selected profile template and reparses model metadata from that request.</small>
-                  </label>
-                  <button id="importRequestBtn" type="button" class="ghost">Import into selected profile</button>
-                </details>
-
-                <div class="profile-table-wrap">
-                  <table class="profile-table">
-                    <thead>
-                      <tr>
-                        <th>Profile</th>
-                        <th>Model</th>
-                        <th>Template</th>
-                        <th>Default</th>
-                        <th>Exists</th>
-                      </tr>
-                    </thead>
-                    <tbody id="profileTableBody"></tbody>
-                  </table>
-                </div>
-              </section>
 
               <div id="setupStatus" class="preview-status">Setup check has not been run yet.</div>
               <pre id="setupText" class="logs small"></pre>
@@ -114,6 +69,82 @@
           </section>
 
           <section class="panel" data-panel="1">
+            <h2>Network profile manager</h2>
+            <p class="panel-lead">Create new profiles, edit selected ones, and safely delete with explicit selection.</p>
+
+            <section class="profile-manager-box">
+              <div class="profile-table-wrap">
+                <table class="profile-table">
+                  <thead>
+                    <tr>
+                      <th>Select</th>
+                      <th>Profile</th>
+                      <th>Model</th>
+                      <th>Template</th>
+                      <th>Default</th>
+                      <th>Exists</th>
+                    </tr>
+                  </thead>
+                  <tbody id="profileTableBody"></tbody>
+                </table>
+              </div>
+
+              <div class="profile-editor-wrap">
+
+              <div class="profile-manager-head">
+                <h3>Profile editor</h3>
+                <span id="managerModeBadge" class="manager-mode-badge">Editing selected profile</span>
+              </div>
+              <div id="managerSelectedProfileText" class="manager-selected-profile-text">Selected profile: none</div>
+
+              <div class="field-grid two-col">
+                <label class="field">
+                  <span>Profile name</span>
+                  <input id="newNetworkProfileName" type="text" placeholder="Example: Claude 4.6 personal" />
+                </label>
+                <label class="field">
+                  <span>Template path used for save/import</span>
+                  <input id="profileTemplatePath" type="text" value="outputs/network-log-ui-full.json" />
+                </label>
+              </div>
+
+              <div class="actions-row profile-manager-actions">
+                <button id="newNetworkProfileBtn" type="button" class="ghost">New profile</button>
+                <button id="createNetworkProfileBtn" type="button" class="ghost">Save profile</button>
+                <button id="updateNetworkProfileBtn" type="button" class="ghost">Update name/path only</button>
+                <button id="setDefaultNetworkProfileBtn" type="button" class="ghost">Set selected as default</button>
+              </div>
+
+              <div class="actions-row profile-delete-actions">
+                <label class="check-row delete-confirm-row">
+                  <input id="confirmDeleteProfile" type="checkbox" />
+                  <span>I understand this will permanently delete the selected profile.</span>
+                </label>
+                <button id="deleteNetworkProfileBtn" type="button" class="ghost danger">Delete checked profile</button>
+              </div>
+
+              <details id="importProfileDetails" class="manual-template">
+                <summary>Import copied request (updates template + model metadata)</summary>
+                <div id="importAutoSyncHint" class="import-sync-hint">[Auto-synced] Import target follows the selected profile.</div>
+                <div class="import-compare-grid">
+                  <label class="field">
+                    <span>Current profile request (read-only)</span>
+                    <textarea id="currentProfileRequestText" rows="8" readonly placeholder="Select a profile to load current request text"></textarea>
+                    <small id="currentProfileRequestSource">Source: waiting for profile selection.</small>
+                  </label>
+                  <label class="field">
+                    <span>New import text (editable)</span>
+                    <textarea id="manualRequestText" rows="8" placeholder="Paste fetch(...), Invoke-WebRequest, or raw JSON body"></textarea>
+                    <small>Edit this box to replace the profile request template and refresh model metadata.</small>
+                  </label>
+                </div>
+                <button id="importRequestBtn" type="button" class="ghost">Import request + update model</button>
+              </details>
+              </div>
+            </section>
+          </section>
+
+          <section class="panel" data-panel="2">
             <h2>Choose execution mode</h2>
             <p class="panel-lead">For this chat app, SimpleChat API mode is recommended.</p>
             <label class="check-row advanced-toggle">
@@ -139,7 +170,7 @@
             </div>
           </section>
 
-          <section class="panel" data-panel="2">
+          <section class="panel" data-panel="3">
             <h2>Upload required files</h2>
             <div class="template-cta">
               <a href="/examples/input-template.xlsx" class="template-download" download>Download Example Excel Input</a>
@@ -161,7 +192,7 @@
             </div>
           </section>
 
-          <section class="panel" data-panel="3">
+          <section class="panel" data-panel="4">
             <h2>Configure run options</h2>
             <div class="field-grid two-col">
               <label class="field">
@@ -235,6 +266,11 @@
 
             <div class="jsonl-options">
               <h3>JSONL output options</h3>
+              <div class="source-ref-help">
+                <strong>Optional source-reference input columns</strong>
+                <small>For row-level citation metadata, add either <code>sources_json</code> or flat columns like <code>source_title</code>, <code>source_url</code>, <code>ref_path</code>, <code>ref_pages</code>, and <code>ref_scope</code>.</small>
+                <small>Multiple references are supported with numbered suffixes such as <code>source_title_1</code>, <code>source_url_1</code>, <code>ref_path_1</code>, then <code>_2</code>, <code>_3</code>, and so on.</small>
+              </div>
               <label class="field">
                 <span>Export profile</span>
                 <select name="jsonlProfile" id="jsonlProfile">
@@ -318,13 +354,17 @@
             </details>
           </section>
 
-          <section class="panel" data-panel="4">
+          <section class="panel" data-panel="5">
             <h2>Run and export</h2>
             <p class="panel-lead">Start the run and monitor logs below.</p>
-            <button id="runBtn" type="submit" class="run-btn">Run</button>
-            <button id="rerunBtn" type="button" class="ghost run-secondary">Rerun Last Config</button>
+            <div class="actions-row run-actions-row">
+              <button id="runBtn" type="submit" class="run-btn">Run</button>
+              <button id="precheckBtn" type="button" class="ghost">Run precheck</button>
+            </div>
 
             <div id="status" class="status" role="status" aria-live="polite">Ready.</div>
+            <div id="precheckStatus" class="preview-status">Precheck has not been run yet.</div>
+            <pre id="precheckText" class="logs small"></pre>
             <div id="runProgressWrap" class="run-progress hidden" aria-live="polite">
               <div class="run-progress-head">
                 <span id="runProgressLabel">Preparing run...</span>
@@ -335,55 +375,48 @@
               </div>
             </div>
 
-            <div id="runStageWrap" class="run-stage hidden" aria-live="polite">
-              <h4>Process stage</h4>
-              <pre id="runStageText" class="logs small"></pre>
-            </div>
-            <pre id="logs" class="logs"></pre>
+            <details class="collapsible-run" open>
+              <summary>Process stage and logs</summary>
+              <div id="runStageWrap" class="run-stage hidden" aria-live="polite">
+                <h4>Process stage</h4>
+                <pre id="runStageText" class="logs small"></pre>
+              </div>
+              <pre id="logs" class="logs"></pre>
+            </details>
 
-            <div class="preview-box">
-              <h3>Run context</h3>
-              <div id="modelUsed" class="preview-status">Model: unknown</div>
-              <pre id="apiExampleText" class="logs small">Example API call will appear after run.</pre>
-            </div>
+            <details class="collapsible-run" open>
+              <summary>Run context</summary>
+              <div class="preview-box">
+                <div id="modelUsed" class="preview-status">Model: unknown</div>
+                <pre id="apiExampleText" class="logs small">Example API call will appear after run.</pre>
+              </div>
+            </details>
 
-            <div id="downloads" class="downloads hidden">
-              <a id="excelLink" target="_blank" rel="noopener">Download Excel</a>
-              <a id="jsonlLink" target="_blank" rel="noopener">Download JSONL</a>
-              <a id="networkLink" target="_blank" rel="noopener">Download Network Log</a>
-            </div>
+            <details class="collapsible-run" open>
+              <summary>Artifacts and JSONL preview</summary>
+              <div id="downloads" class="downloads hidden">
+                <a id="excelLink" target="_blank" rel="noopener">Download Excel</a>
+                <a id="jsonlLink" target="_blank" rel="noopener">Download JSONL</a>
+                <a id="networkLink" target="_blank" rel="noopener">Download Network Log</a>
+              </div>
 
-            <div class="precheck-box">
-              <h3>Connectivity precheck</h3>
-              <button id="precheckBtn" type="button" class="ghost">Run precheck</button>
-              <div id="precheckStatus" class="preview-status">Precheck has not been run yet.</div>
-              <pre id="precheckText" class="logs small"></pre>
-            </div>
+              <div class="preview-box">
+                <button id="previewBtn" type="button" class="ghost" disabled>Preview latest JSONL</button>
+                <div id="previewStatus" class="preview-status">Run first to preview.</div>
+                <pre id="previewText" class="logs small"></pre>
+              </div>
+            </details>
+          </section>
 
-            <div class="preview-box">
-              <h3>JSONL preview and validation</h3>
-              <button id="previewBtn" type="button" class="ghost" disabled>Preview latest JSONL</button>
-              <div id="previewStatus" class="preview-status">Run first to preview.</div>
-              <pre id="previewText" class="logs small"></pre>
-            </div>
-
+          <section class="panel" data-panel="6">
+            <h2>History</h2>
+            <p class="panel-lead">Browse recent runs and download older artifacts.</p>
             <div class="history-box">
-              <h3>Recent runs</h3>
               <div class="actions-row">
                 <button id="refreshHistoryBtn" type="button" class="ghost">Refresh history</button>
                 <button id="clearHistoryBtn" type="button" class="ghost danger">Clear history</button>
               </div>
               <div id="historyList" class="history-list"></div>
-            </div>
-
-            <div class="foundry-box">
-              <h3>Foundry export helper</h3>
-              <label class="field">
-                <span>Target folder</span>
-                <input type="text" id="foundryTargetDir" value="foundry_exports" />
-              </label>
-              <button id="exportFoundryBtn" type="button" class="ghost" disabled>Copy latest JSONL to Foundry folder</button>
-              <div id="foundryStatus" class="preview-status">Run first to enable export.</div>
             </div>
           </section>
 

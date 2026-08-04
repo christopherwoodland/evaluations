@@ -414,10 +414,11 @@ def render_shell_header() -> None:
 </div>
 <div class="steps-wrap">
     <a class="step-pill step-link is-active" href="#step-setup"><span class="step-num">0</span>Setup</a>
-    <a class="step-pill step-link" href="#step-mode-files"><span class="step-num">1</span>Mode</a>
-    <a class="step-pill step-link" href="#step-mode-files"><span class="step-num">2</span>Files</a>
+    <a class="step-pill step-link" href="#step-profiles"><span class="step-num">1</span>Profiles</a>
+    <a class="step-pill step-link" href="#step-mode-files"><span class="step-num">2</span>Mode/Files</a>
     <a class="step-pill step-link" href="#step-config"><span class="step-num">3</span>Config</a>
     <a class="step-pill step-link" href="#step-run"><span class="step-num">4</span>Run</a>
+    <a class="step-pill step-link" href="#step-history"><span class="step-num">5</span>History</a>
 </div>
 """,
         unsafe_allow_html=True,
@@ -585,6 +586,7 @@ def load_network_template_profiles(base_url: str) -> tuple[list[dict[str, Any]],
                 "description": str(profile.get("description") or "").strip(),
                 "modelId": str(profile.get("modelId") or "").strip(),
                 "modelName": str(profile.get("modelName") or "").strip(),
+                "exists": bool(profile.get("exists", True)),
             }
         )
 
@@ -602,6 +604,227 @@ def profile_display_label(profile: dict[str, Any]) -> str:
     model = str(profile.get("modelName") or profile.get("modelId") or "").strip()
     return f"{name} [{model}]" if model else name
 
+
+def find_profile_by_id(profile_id: str) -> dict[str, Any] | None:
+    normalized_id = str(profile_id or "").strip()
+    for profile in st.session_state.network_template_profiles or []:
+        if str(profile.get("id") or "").strip() == normalized_id:
+            return profile
+    return None
+
+
+def render_network_profile_manager(base_url: str, settings: dict[str, Any]) -> None:
+    st.subheader("Step 1: Network profile manager")
+    st.caption("Create new profiles, edit selected profiles, and delete safely with explicit confirmation.")
+
+    profiles = st.session_state.network_template_profiles or []
+    selected_profile_id = str(st.session_state.get("manager_selected_profile_id") or settings.get("networkTemplateProfile") or "")
+    selected_profile = find_profile_by_id(selected_profile_id)
+    current_template = str((selected_profile or {}).get("networkTemplate") or settings.get("networkTemplate") or "").strip()
+
+    if "manager_mode" not in st.session_state:
+        st.session_state["manager_mode"] = "edit"
+    if "manager_delete_confirm" not in st.session_state:
+        st.session_state["manager_delete_confirm"] = False
+
+    previous_selected = str(st.session_state.get("manager_template_profile_id") or "")
+    if previous_selected != selected_profile_id:
+        st.session_state["manager_template_path"] = current_template
+        st.session_state["manager_template_profile_id"] = selected_profile_id
+        if selected_profile:
+            st.session_state["manager_profile_name"] = str(selected_profile.get("name") or "")
+
+    if st.session_state.get("manager_mode") == "edit" and selected_profile:
+        st.session_state["manager_profile_name"] = str(selected_profile.get("name") or st.session_state.get("manager_profile_name") or "")
+
+    if profiles:
+        selection_labels = []
+        selected_label = ""
+        rows: list[dict[str, str]] = []
+        default_id = str(st.session_state.default_network_template_profile or "")
+        for profile in profiles:
+            pid = str(profile.get("id") or "")
+            pname = str(profile.get("name") or pid)
+            selection_labels.append(f"{pname} ({pid})")
+            if pid == str(st.session_state.get("manager_selected_profile_id") or ""):
+                selected_label = f"{pname} ({pid})"
+            rows.append(
+                {
+                    "Profile": str(profile.get("name") or profile.get("id") or ""),
+                    "Model": str(profile.get("modelName") or profile.get("modelId") or "-"),
+                    "Template": str(profile.get("networkTemplate") or ""),
+                    "Default": "Yes" if str(profile.get("id") or "") == default_id else "",
+                    "Exists": "No" if profile.get("exists") is False else "Yes",
+                }
+            )
+        selected_choice = st.selectbox(
+            "Profile checkbox selection",
+            options=selection_labels,
+            index=selection_labels.index(selected_label) if selected_label in selection_labels else 0,
+            key="manager_profile_checkbox_select",
+        )
+        selected_id_from_label = selected_choice.rsplit("(", 1)[-1].rstrip(")").strip()
+        if selected_id_from_label and selected_id_from_label != str(st.session_state.get("manager_selected_profile_id") or ""):
+            st.session_state["manager_selected_profile_id"] = selected_id_from_label
+            st.session_state["manager_mode"] = "edit"
+            st.rerun()
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+    else:
+        st.info("No network template profiles found.")
+
+    mode_label = "Creating new profile" if st.session_state.get("manager_mode") == "create" else "Editing selected profile"
+    st.caption(f"Mode: {mode_label}")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        profile_name = st.text_input("Profile name", key="manager_profile_name")
+    with c2:
+        template_path = st.text_input("Template path used for save/import", key="manager_template_path")
+
+    a1, a2, a3, a4 = st.columns(4)
+    with a1:
+        if st.button("New profile", use_container_width=True):
+            st.session_state["manager_mode"] = "create"
+            st.session_state["manager_selected_profile_id"] = ""
+            st.session_state["manager_profile_name"] = ""
+            st.session_state["manager_delete_confirm"] = False
+            st.rerun()
+
+    with a2:
+        if st.button("Save profile", use_container_width=True, disabled=st.session_state.get("manager_mode") != "create"):
+            if not profile_name.strip():
+                st.error("Enter a profile name.")
+            elif not template_path.strip():
+                st.error("Enter a template path.")
+            elif any(str(p.get("name") or "").strip().lower() == profile_name.strip().lower() for p in profiles):
+                st.error("Profile name already exists. Select it and use update.")
+            else:
+                ok, data = api_post_json(
+                    base_url,
+                    "/api/network-template-profiles/upsert",
+                    {"name": profile_name.strip(), "networkTemplate": template_path.strip()},
+                )
+                if ok and data.get("ok"):
+                    st.success("Profile created.")
+                    st.session_state["manager_mode"] = "edit"
+                    st.rerun()
+                else:
+                    st.error(data.get("error", "Could not create profile."))
+
+    with a3:
+        if st.button("Update name/path only", use_container_width=True, disabled=st.session_state.get("manager_mode") != "edit"):
+            selected_profile_id = str(st.session_state.get("manager_selected_profile_id") or "")
+            selected = find_profile_by_id(selected_profile_id)
+            if not selected:
+                st.error("Select a profile first.")
+            elif not profile_name.strip():
+                st.error("Enter a profile name.")
+            elif not template_path.strip():
+                st.error("Enter a template path.")
+            elif any(
+                str(p.get("id") or "") != selected_profile_id
+                and str(p.get("name") or "").strip().lower() == profile_name.strip().lower()
+                for p in profiles
+            ):
+                st.error("Another profile already uses that name.")
+            else:
+                ok, data = api_post_json(
+                    base_url,
+                    "/api/network-template-profiles/upsert",
+                    {"id": selected_profile_id, "name": profile_name.strip(), "networkTemplate": template_path.strip()},
+                )
+                if ok and data.get("ok"):
+                    st.success("Profile updated.")
+                    st.rerun()
+                else:
+                    st.error(data.get("error", "Could not update profile."))
+
+    with a4:
+        if st.button("Set selected as default", use_container_width=True):
+            selected_profile_id = str(st.session_state.get("manager_selected_profile_id") or "")
+            if not selected_profile_id:
+                st.error("Select a profile checkbox first.")
+            else:
+                ok, data = api_post_json(
+                    base_url,
+                    "/api/network-template-profiles/set-default",
+                    {"id": selected_profile_id},
+                )
+                if ok and data.get("ok"):
+                    st.success("Default profile updated.")
+                    st.rerun()
+                else:
+                    st.error(data.get("error", "Could not set default profile."))
+
+    st.session_state["manager_delete_confirm"] = st.checkbox(
+        "I understand this will permanently delete the selected profile.",
+        value=bool(st.session_state.get("manager_delete_confirm")),
+    )
+
+    if st.button("Delete checked profile", use_container_width=False, type="secondary"):
+        selected_profile_id = str(st.session_state.get("manager_selected_profile_id") or "")
+        if not selected_profile_id:
+            st.error("Select a profile checkbox first.")
+        elif not st.session_state.get("manager_delete_confirm"):
+            st.error("Check delete confirmation first.")
+        else:
+            ok, data = api_post_json(
+                base_url,
+                "/api/network-template-profiles/delete",
+                {"id": selected_profile_id},
+            )
+            if ok and data.get("ok"):
+                st.success("Profile deleted.")
+                st.session_state["manager_delete_confirm"] = False
+                st.session_state["manager_selected_profile_id"] = str(data.get("defaultProfileId") or "")
+                st.session_state["manager_mode"] = "edit"
+                st.rerun()
+            else:
+                st.error(data.get("error", "Could not delete profile."))
+
+    with st.expander("Import copied request (updates template + model metadata)"):
+        st.caption("Paste fetch(...), Invoke-WebRequest, or raw JSON body. Use import when you want to replace the request template and refresh model metadata.")
+        selected_profile_id = str(st.session_state.get("manager_selected_profile_id") or "")
+        selected_for_import = find_profile_by_id(selected_profile_id)
+        if selected_for_import:
+            st.caption(
+                f"Import target: {selected_for_import.get('name') or selected_profile_id} -> {selected_for_import.get('networkTemplate') or ''}"
+            )
+            st.caption("[Auto-synced] Import target follows the selected profile.")
+            if st.session_state.get("manager_mode") != "create":
+                st.session_state["manager_template_path"] = str(selected_for_import.get("networkTemplate") or template_path)
+        else:
+            st.caption("[Auto-synced] No selected profile available for import.")
+        request_text = st.text_area(
+            "Copied request or JSON body",
+            height=220,
+            placeholder="Paste fetch(...), Invoke-WebRequest, or raw JSON body",
+            key="manager_request_text",
+        )
+        if st.button("Import request + update model", icon=":material/data_object:"):
+            selected_profile_id = str(st.session_state.get("manager_selected_profile_id") or "")
+            if not request_text.strip():
+                st.error("Paste a copied request first.")
+            elif not template_path.strip():
+                st.error("Provide a template path first.")
+            elif not selected_profile_id:
+                st.error("Select a profile checkbox first.")
+            else:
+                ok, data = api_post_json(
+                    base_url,
+                    "/api/import-network-template",
+                    {
+                        "requestText": request_text,
+                        "networkTemplate": template_path.strip(),
+                        "networkTemplateProfile": selected_profile_id,
+                        "url": settings["url"],
+                    },
+                )
+                if ok and data.get("ok"):
+                    st.success(data.get("message", "Network template imported."))
+                    st.rerun()
+                else:
+                    st.error(data.get("error", "Could not import the network template."))
 
 def render_setup_check(base_url: str, settings: dict[str, Any]) -> None:
     ok, data = api_post_json(
@@ -698,39 +921,7 @@ def render_setup_step(base_url: str, settings: dict[str, Any]) -> None:
         if st.button("Check setup readiness"):
             render_setup_check(base_url, settings)
 
-    with st.container(border=True):
-        st.markdown("#### Import a copied request manually")
-        st.caption("Paste fetch(...), Invoke-WebRequest, or raw JSON body. Only the /api/chat/stream URL and JSON body are saved. Cookies and headers are discarded.")
-        with st.form("manual_request_import", clear_on_submit=True):
-            request_text = st.text_area(
-                "Copied request or JSON body",
-                height=220,
-                placeholder="Paste fetch(...), Invoke-WebRequest, or raw JSON body",
-            )
-            import_request = st.form_submit_button(
-                "Create network template",
-                icon=":material/data_object:",
-            )
-
-        if import_request:
-            if not request_text.strip():
-                st.error("Paste a copied PowerShell request first.")
-            else:
-                ok, data = api_post_json(
-                    base_url,
-                    "/api/import-network-template",
-                    {
-                        "requestText": request_text,
-                        "networkTemplate": settings["networkTemplate"],
-                        "networkTemplateProfile": settings.get("networkTemplateProfile", ""),
-                        "url": settings["url"],
-                    },
-                )
-                if ok and data.get("ok"):
-                    st.success(data.get("message", "Network template created."))
-                    render_setup_check(base_url, settings)
-                else:
-                    st.error(data.get("error", "Could not create the network template."))
+    st.caption("Use Step 1: Profiles for profile create/edit/delete/default and manual request imports.")
 
 
 def render_mode_and_files(settings: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -791,6 +982,7 @@ def render_config(settings: dict[str, Any], mode: str, profiles: list[dict[str, 
         selected_profile = profile_by_id.get(selected_profile_id, {})
         selected_template = str(selected_profile.get("networkTemplate") or settings["networkTemplate"])
         st.caption(f"Selected profile path: {selected_template}")
+        st.caption("Use Step 1: Profiles to manage profiles and import copied requests.")
     else:
         st.caption("No saved network template profiles found. Using explicit template path.")
 
@@ -817,6 +1009,10 @@ def render_config(settings: dict[str, Any], mode: str, profiles: list[dict[str, 
     wait_ms = st.number_input("Wait after send (ms)", min_value=0, step=100, value=500)
 
     st.markdown("### JSONL output options")
+    st.info(
+        "Optional source-reference columns: use sources_json for a JSON array of sources, or flat fields like source_title, source_url, ref_path, ref_pages, ref_scope. "
+        "Multiple refs per row are supported with numbered suffixes such as source_title_1/source_url_1/ref_path_1."
+    )
     profile = st.selectbox(
         "Export profile",
         ["foundry-basic", "foundry-context", "custom"],
@@ -916,7 +1112,7 @@ def render_config(settings: dict[str, Any], mode: str, profiles: list[dict[str, 
 
 
 def render_precheck(base_url: str, mode: str, cfg: dict[str, Any]) -> None:
-    if st.button("Run precheck"):
+    if st.button("Run precheck", width="stretch"):
         ok, data = api_post_json(
             base_url,
             "/api/precheck",
@@ -1255,8 +1451,12 @@ def main() -> None:
     with st.expander("Step 0: Setup", expanded=True):
         render_setup_step(st.session_state.backend_url, settings)
 
+    st.markdown('<div id="step-profiles" class="anchor-target"></div>', unsafe_allow_html=True)
+    with st.expander("Step 1: Profiles", expanded=True):
+        render_network_profile_manager(st.session_state.backend_url, settings)
+
     st.markdown('<div id="step-mode-files" class="anchor-target"></div>', unsafe_allow_html=True)
-    with st.expander("Step 1-2: Mode and files", expanded=True):
+    with st.expander("Step 2: Mode and files", expanded=True):
         mode_state, file_state = render_mode_and_files(settings)
 
     st.markdown('<div id="step-config" class="anchor-target"></div>', unsafe_allow_html=True)
@@ -1267,23 +1467,23 @@ def main() -> None:
     with st.expander("Step 4: Run", expanded=True):
         c1, c2, c3 = st.columns(3)
         with c1:
-            if st.button("Run batch", type="primary"):
+            if st.button("Run batch", type="primary", width="stretch"):
                 run_batch(st.session_state.backend_url, mode_state["mode"], cfg, file_state)
         with c2:
-            if st.button("Rerun last config"):
+            if st.button("Rerun last config", width="stretch"):
                 rerun_last_config(st.session_state.backend_url, bool(cfg["maskLogs"]))
         with c3:
             render_precheck(st.session_state.backend_url, mode_state["mode"], cfg)
 
-        render_result_blocks(st.session_state.backend_url)
+        with st.expander("Run outputs", expanded=True):
+            render_result_blocks(st.session_state.backend_url)
 
-        st.markdown("### JSONL preview and validation")
-        if st.button("Preview latest JSONL"):
-            preview_latest_jsonl(st.session_state.backend_url)
+        with st.expander("JSONL preview and validation", expanded=False):
+            if st.button("Preview latest JSONL"):
+                preview_latest_jsonl(st.session_state.backend_url)
 
-        export_foundry(st.session_state.backend_url)
-
-    with st.expander("Recent runs", expanded=False):
+    st.markdown('<div id="step-history" class="anchor-target"></div>', unsafe_allow_html=True)
+    with st.expander("Step 5: History", expanded=False):
         render_history(st.session_state.backend_url)
 
 

@@ -461,6 +461,18 @@ function normalizeCitation(entry) {
       out[key] = String(entry[key]);
     }
   }
+  for (const [targetKey, candidateKeys] of Object.entries({
+    ref_path: ["ref_path", "refPath", "path"],
+    pages: ["pages", "page_range", "ref_pages", "refPages"],
+    scope: ["scope", "ref_scope", "refScope"],
+  })) {
+    for (const key of candidateKeys) {
+      if (entry[key] != null && String(entry[key]).trim() !== "") {
+        out[targetKey] = String(entry[key]).trim();
+        break;
+      }
+    }
+  }
   if (!Object.keys(out).length) return null;
   return out;
 }
@@ -484,21 +496,73 @@ function extractCitationsFromResponseText(text) {
   const lines = input.split(/\r?\n/);
   const out = [];
   const urlRx = /https?:\/\/[^\s)\]]+/gi;
+  let current = null;
+
+  function pushCurrent() {
+    const normalized = normalizeCitation(current);
+    if (normalized) out.push(normalized);
+    current = null;
+  }
 
   for (const rawLine of lines) {
     const line = String(rawLine || "").trim();
     if (!line) continue;
+
+    if (/^\*\*sources\*\*$/i.test(line) || /^sources\s*:? ?$/i.test(line)) {
+      continue;
+    }
+
+    const bulletTitleMatch = line.match(/^[-*]\s*(?:source\s+title\s*:\s*)?(.+)$/i);
+    if (bulletTitleMatch && !/^[-*]\s*https?:\/\//i.test(line)) {
+      pushCurrent();
+      current = { title: String(bulletTitleMatch[1] || "").trim() };
+      continue;
+    }
+
+    const sourceTitleMatch = line.match(/^source\s+title\s*:\s*(.+)$/i);
+    if (sourceTitleMatch) {
+      if (!current) current = {};
+      current.title = String(sourceTitleMatch[1] || "").trim();
+      continue;
+    }
+
+    const urlLabelMatch = line.match(/^url\s*:\s*(https?:\/\/\S+)/i);
+    if (urlLabelMatch) {
+      if (!current) current = {};
+      current.url = String(urlLabelMatch[1] || "").trim();
+      continue;
+    }
+
+    const refPathMatch = line.match(/^ref\s+path\s*:\s*(.+)$/i);
+    if (refPathMatch) {
+      if (!current) current = {};
+      const refParts = parseRefPathDetails(refPathMatch[1]);
+      current.ref_path = refParts.ref_path;
+      if (refParts.pages) current.pages = refParts.pages;
+      if (refParts.scope) current.scope = refParts.scope;
+      continue;
+    }
+
     const matches = line.match(urlRx);
     if (!matches?.length) continue;
 
-    // Keep line text and first URL as normalized citation fallback.
     const firstUrl = String(matches[0] || "").trim();
     const cleanedText = line.replace(/^[-*\d.\s]+/, "").trim();
+    if (current) {
+      current.url = current.url || firstUrl;
+      if (!current.text && cleanedText && cleanedText !== firstUrl) {
+        current.text = cleanedText;
+      }
+      continue;
+    }
+
     out.push({
       url: firstUrl,
       text: cleanedText || firstUrl,
     });
   }
+
+  pushCurrent();
 
   return dedupeCitations(out);
 }
@@ -529,10 +593,130 @@ function shouldEnableWebSources(contextValue) {
   return /\b(web|internet|search|source|sources|grounded)\b/.test(text);
 }
 
-function withCitationInstruction(query) {
+function parseRefPathDetails(value) {
+  const text = String(value || "").trim();
+  if (!text) return { ref_path: "", pages: "", scope: "" };
+
+  const match = text.match(/^(.*?)(?:\s*\((.*)\))?$/);
+  const ref_path = String(match?.[1] || text).trim();
+  const detail = String(match?.[2] || "").trim();
+  let pages = "";
+  let scope = "";
+
+  if (detail) {
+    for (const part of detail.split(/\s*;\s*/)) {
+      if (!pages && /\bpage/i.test(part)) {
+        pages = String(part).trim();
+      } else if (!scope) {
+        scope = String(part).trim();
+      }
+    }
+  }
+
+  return { ref_path, pages, scope };
+}
+
+function extractRowSourceReferences(row) {
+  if (!row || typeof row !== "object") return [];
+
+  const jsonField = getFieldCaseInsensitive(row, ["sources_json", "source_refs_json", "document_sources_json"]);
+  if (jsonField) {
+    try {
+      const parsed = JSON.parse(String(jsonField));
+      const list = Array.isArray(parsed) ? parsed : [parsed];
+      return list.map((entry) => normalizeCitation(entry)).filter(Boolean);
+    } catch {
+      // Fall through to column-based extraction.
+    }
+  }
+
+  const refs = [];
+  const suffixes = ["", "_1", "_2", "_3", "_4", "_5"];
+  for (const suffix of suffixes) {
+    const title = String(getFieldCaseInsensitive(row, [`source_title${suffix}`, `ref_title${suffix}`, `doc_title${suffix}`]) || "").trim();
+    const url = String(getFieldCaseInsensitive(row, [`source_url${suffix}`, `ref_url${suffix}`, `doc_url${suffix}`]) || "").trim();
+    const refPathRaw = String(getFieldCaseInsensitive(row, [`ref_path${suffix}`, `source_path${suffix}`, `doc_path${suffix}`]) || "").trim();
+    const pages = String(getFieldCaseInsensitive(row, [`ref_pages${suffix}`, `source_pages${suffix}`, `doc_pages${suffix}`]) || "").trim();
+    const scope = String(getFieldCaseInsensitive(row, [`ref_scope${suffix}`, `source_scope${suffix}`, `doc_scope${suffix}`]) || "").trim();
+
+    if (!title && !url && !refPathRaw) continue;
+    const parsedRef = parseRefPathDetails(refPathRaw);
+    refs.push(
+      normalizeCitation({
+        title,
+        url,
+        ref_path: parsedRef.ref_path || refPathRaw,
+        pages: pages || parsedRef.pages,
+        scope: scope || parsedRef.scope,
+      }),
+    );
+  }
+
+  return dedupeCitations(refs.filter(Boolean));
+}
+
+function formatSourceReferenceInstruction(sourceRefs) {
+  const refs = Array.isArray(sourceRefs) ? sourceRefs.filter(Boolean) : [];
+  if (!refs.length) return "";
+
+  const lines = [
+    "Use these provided document references when relevant.",
+    "If you cite one of them, preserve its exact Source title, URL, and Ref path in the Sources section.",
+    "Provided document references:",
+  ];
+
+  for (const ref of refs) {
+    const parts = [];
+    if (ref.title) parts.push(`- Source title: ${ref.title}`);
+    if (ref.url) parts.push(`URL: ${ref.url}`);
+    if (ref.ref_path) {
+      let refPathLine = `Ref path: ${ref.ref_path}`;
+      const detailParts = [ref.pages, ref.scope].filter(Boolean);
+      if (detailParts.length) {
+        refPathLine += ` (${detailParts.join("; ")})`;
+      }
+      parts.push(refPathLine);
+    }
+    if (parts.length) lines.push(parts.join("\n"));
+  }
+
+  return lines.join("\n");
+}
+
+function withCitationInstruction(query, sourceRefs = []) {
   const base = String(query || "").trim();
   if (!base) return base;
-  return `${base}\n\nPlease provide citations/sources for your answer. Include a \"Sources\" section with source title and URL for each factual claim. If no verifiable sources are available, explicitly state \"No sources available.\"`;
+  const sourceInstruction = formatSourceReferenceInstruction(sourceRefs);
+  const tail = [
+    'Please provide citations/sources for your answer.',
+    'At the end of the answer, include a markdown heading exactly named "**Sources**".',
+    'For each cited source, use exactly this 3-line block format:',
+    '- Source title: <title>',
+    'URL: <url>',
+    'Ref path: <ref path>',
+    'If page or scope metadata exists for a provided document reference, append it to the Ref path line in parentheses, for example: Ref path: file.json (Pages 2-3; personal document scope).',
+    'Do not collapse these onto one line and do not omit labels.',
+    'If a provided document reference is used, preserve its exact Source title, URL, and Ref path.',
+    'If no verifiable sources are available, explicitly state "No sources available."',
+  ].join(" ");
+  return [base, sourceInstruction, tail].filter(Boolean).join("\n\n");
+}
+
+function enrichCitationsWithSourceReferences(citations, sourceRefs) {
+  const refs = Array.isArray(sourceRefs) ? sourceRefs.filter(Boolean) : [];
+  if (!refs.length) return dedupeCitations(citations || []);
+
+  return dedupeCitations((citations || []).map((citation) => {
+    const normalized = normalizeCitation(citation) || {};
+    const url = String(normalized.url || "").trim().toLowerCase();
+    const title = String(normalized.title || normalized.text || "").trim().toLowerCase();
+    const match = refs.find((ref) => {
+      const refUrl = String(ref.url || "").trim().toLowerCase();
+      const refTitle = String(ref.title || "").trim().toLowerCase();
+      return (url && refUrl && url === refUrl) || (title && refTitle && title.includes(refTitle));
+    });
+    return match ? { ...match, ...normalized } : normalized;
+  }));
 }
 
 function tryExec(command, cwd) {
@@ -813,7 +997,7 @@ function writeOutputs({ results, outputDir, baseName, jsonlOptions, metadata }) 
 
   const lines = results.map((r, idx) =>
     {
-      const contextVal = r.context_value ?? getFieldCaseInsensitive(r, ["context", "retrieved_context", "source_context"]);
+      const contextVal = r.context ?? r.context_value ?? getFieldCaseInsensitive(r, ["context", "retrieved_context", "source_context"]);
       const base = {
         [opts.queryKey]: r.query,
         [opts.responseKey]: r.model_response,
@@ -855,6 +1039,19 @@ function writeOutputs({ results, outputDir, baseName, jsonlOptions, metadata }) 
   fs.writeFileSync(outJsonl, lines.join("\n"), "utf8");
 
   return { outXlsx, outJsonl, summary: { totalRows, okRows, errorRows, citationRows } };
+}
+
+function renderApiBodyTemplate(template, promptText) {
+  const rawTemplate = String(template || "");
+  const prompt = String(promptText || "");
+  if (!rawTemplate) {
+    return { messages: [{ role: "user", content: prompt }] };
+  }
+
+  const escapedPrompt = JSON.stringify(prompt);
+  const withQuotedPlaceholder = rawTemplate.replace(/"\{\{\s*query\s*\}\}"/g, escapedPrompt);
+  const replaced = withQuotedPlaceholder.replace(/\{\{\s*query\s*\}\}/g, prompt);
+  return JSON.parse(replaced);
 }
 
 function validateRowsStrict({ rows, queryColumn, referenceColumn, contextColumn, jsonlConfig }) {
@@ -1184,13 +1381,14 @@ async function runUiMode({
     const query = String(row[queryColumn] ?? "").trim();
     const reference = String(row[referenceColumn] ?? "").trim();
     const contextValue = contextColumn ? String(row[contextColumn] ?? "").trim() : "";
+    const sourceRefs = extractRowSourceReferences(row);
 
     if (!query) {
       results.push({
         ...row,
         query,
         response: reference,
-        context_value: contextValue,
+        context: contextValue,
         model_response: "",
         citations_json: "[]",
         status: "skipped",
@@ -1216,7 +1414,7 @@ async function runUiMode({
 
       const prior = await getAssistantCount(page, selectors);
       const priorFallback = await getAssistantFallbackSnapshot(page);
-      await setPromptInInput(page, inputHit.locator, query);
+      await setPromptInInput(page, inputHit.locator, withCitationInstruction(query, sourceRefs));
 
       const sentByButton = await safeClick(page, selectors.send);
       if (!sentByButton) {
@@ -1227,13 +1425,15 @@ async function runUiMode({
 
       const responseText = await waitForAssistantReply(page, selectors, prior, priorFallback, timeoutMs);
 
+      const citations = enrichCitationsWithSourceReferences(extractCitationsFromResponseText(responseText), sourceRefs);
+
       results.push({
         ...row,
         query,
         response: reference,
-        context_value: contextValue,
+        context: contextValue,
         model_response: responseText,
-        citations_json: "[]",
+        citations_json: JSON.stringify(citations),
         status: "ok",
         error: "",
         row_data: JSON.stringify(row),
@@ -1253,7 +1453,7 @@ async function runUiMode({
         ...row,
         query,
         response: reference,
-        context_value: contextValue,
+        context: contextValue,
         model_response: "",
         citations_json: "[]",
         status: "error",
@@ -1322,13 +1522,14 @@ async function runApiMode({
     const query = String(row[queryColumn] ?? "").trim();
     const reference = String(row[referenceColumn] ?? "").trim();
     const contextValue = contextColumn ? String(row[contextColumn] ?? "").trim() : "";
+    const sourceRefs = extractRowSourceReferences(row);
 
     if (!query) {
       results.push({
         ...row,
         query,
         response: reference,
-        context_value: contextValue,
+        context: contextValue,
         model_response: "",
         citations_json: "[]",
         status: "skipped",
@@ -1341,9 +1542,10 @@ async function runApiMode({
 
     try {
       const requestStarted = Date.now();
+      const effectivePrompt = withCitationInstruction(query, sourceRefs);
       const requestBody = apiBodyTemplate
-        ? JSON.parse(apiBodyTemplate.replace(/\{\{\s*query\s*\}\}/g, query))
-        : { messages: [{ role: "user", content: query }] };
+        ? renderApiBodyTemplate(apiBodyTemplate, effectivePrompt)
+        : { messages: [{ role: "user", content: effectivePrompt }] };
 
       const res = await fetch(apiUrl, {
         method: apiMethod,
@@ -1369,13 +1571,17 @@ async function runApiMode({
 
       const responseVal = deepGet(data, apiResponsePath || "choices.0.message.content");
       const responseText = typeof responseVal === "string" ? responseVal : JSON.stringify(responseVal ?? data);
-      const citations = extractCitations(data);
+      const structuredCitations = extractCitations(data);
+      const citations = enrichCitationsWithSourceReferences(
+        structuredCitations.length ? structuredCitations : extractCitationsFromResponseText(responseText),
+        sourceRefs,
+      );
 
       results.push({
         ...row,
         query,
         response: reference,
-        context_value: contextValue,
+        context: contextValue,
         model_response: responseText,
         citations_json: JSON.stringify(citations),
         status: "ok",
@@ -1394,7 +1600,7 @@ async function runApiMode({
         ...row,
         query,
         response: reference,
-        context_value: contextValue,
+        context: contextValue,
         model_response: "",
         citations_json: "[]",
         status: "error",
@@ -1488,6 +1694,7 @@ async function runSimpleChatApiMode({
     const query = String(row[queryColumn] ?? "").trim();
     const reference = String(row[referenceColumn] ?? "").trim();
     const contextValue = contextColumn ? String(row[contextColumn] ?? "").trim() : "";
+    const sourceRefs = extractRowSourceReferences(row);
     let requestPreviewJson = "";
 
     if (!query) {
@@ -1495,7 +1702,7 @@ async function runSimpleChatApiMode({
         ...row,
         query,
         response: reference,
-        context_value: contextValue,
+        context: contextValue,
         request_json: requestPreviewJson,
         model_response: "",
         citations_json: "[]",
@@ -1528,7 +1735,7 @@ async function runSimpleChatApiMode({
 
       const payload = {
         ...templatePayload,
-        message: withCitationInstruction(query),
+        message: withCitationInstruction(query, sourceRefs),
         conversation_id: conversationId,
       };
 
@@ -1566,13 +1773,13 @@ async function runSimpleChatApiMode({
         throw new Error("No assistant content chunks found in SSE response.");
       }
 
-      const effectiveCitations = extractCitationsFromResponseText(responseText);
+      const effectiveCitations = enrichCitationsWithSourceReferences(extractCitationsFromResponseText(responseText), sourceRefs);
 
       results.push({
         ...row,
         query,
         response: reference,
-        context_value: contextValue,
+        context: contextValue,
         request_json: requestPreviewJson,
         conversation_id: conversationId,
         model_response: responseText,
@@ -1595,7 +1802,7 @@ async function runSimpleChatApiMode({
         ...row,
         query,
         response: reference,
-        context_value: contextValue,
+        context: contextValue,
         request_json: requestPreviewJson,
         model_response: "",
         citations_json: "[]",

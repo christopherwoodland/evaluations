@@ -32,10 +32,17 @@ Recommended columns:
 - `response`
 - `context` (optional)
 
+Optional citation/source metadata columns:
+
+- `sources_json`: JSON array of source objects for the row, for example `[{"title":"WRA Co Primer and Bullet Help","url":"https://cartridge-corner.com/wrahelp.htm","ref_path":"wra_primer_bullet_help.json","pages":"Pages 2-3","scope":"personal document scope"}]`
+- or column-based fields such as `source_title`, `source_url`, `ref_path`, `ref_pages`, `ref_scope`
+- for multiple row-specific references, suffix numbered columns like `source_title_1`, `source_url_1`, `ref_path_1`, `source_title_2`, `source_url_2`, `ref_path_2`
+
 Notes:
 
 - `response` is treated as the expected answer.
 - If context inclusion is enabled in JSONL options, `context` is written into JSONL output.
+- When source metadata is present, the runner adds it to the prompt and preserves `ref_path` metadata in output citations when the model cites those sources.
 
 Templates:
 
@@ -99,7 +106,7 @@ In the sidebar, set the backend URL or use Auto-detect.
 - `ui`: browser automation mode
 - `api`: generic HTTP endpoint mode
 
-## Manual network template creation (Step 0)
+## Manual network template creation (Step 0.5)
 
 You can create `outputs/network-log-ui-full.json` without running a full UI capture.
 
@@ -114,13 +121,14 @@ npm run wizard
 ```
 
 2. Open the wizard and go to **Step 0: One-time SimpleChat setup**.
-3. Expand **Import a copied request manually**.
-4. Paste one of the supported formats:
+3. Pick the active run profile in **Profile for setup checks and runs**.
+4. In **Network profile manager**, use **Import copied request into selected profile**.
+5. Paste one of the supported formats:
 	- Full `fetch(...)` call
 	- PowerShell `Invoke-WebRequest` snippet
 	- Raw JSON request body
-5. Click **Create network template**.
-6. Click **Check setup readiness** to confirm the template is valid.
+6. Click **Import into selected profile**.
+7. Click **Check setup readiness** to confirm the template is valid.
 
 ### Python Streamlit UI
 
@@ -136,14 +144,15 @@ npm run wizard
 streamlit run python-ui/app.py
 ```
 
-3. Open the **Setup** tab.
-4. In **Import a copied request manually**, paste `fetch(...)`, PowerShell, or raw JSON.
-5. Click **Create network template**.
-6. The app runs setup check again automatically and shows pass/fail checks.
+3. Open **Step 0: Setup** and choose the active profile.
+4. Open **Step 0.5: Network profiles**.
+5. In **Import copied request into selected profile**, paste `fetch(...)`, PowerShell, or raw JSON.
+6. Click **Import into selected profile**.
+7. Run **Check setup readiness** from Step 0.
 
 ### What gets saved
 
-- The backend writes a single sanitized request template event to `outputs/network-log-ui-full.json` (or your selected network template path).
+- The backend writes a single sanitized request template event to the selected profile template path (commonly `outputs/network-log-ui-full.json`).
 - Only request URL + JSON body needed for replay are stored.
 - Cookies/headers are discarded.
 - Stateful conversation/message fields are removed from the pasted payload before save.
@@ -175,6 +184,7 @@ JSONL output includes one object per row with response plus optional fields base
 ```bash
 npm run smoke
 npm run smoke:api
+npm run smoke:source-refs
 npm run smoke:all
 ```
 

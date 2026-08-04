@@ -56,26 +56,27 @@ Or use the helper launcher:
 ## Use the app
 
 1. In the sidebar, verify backend URL. Use `Auto-detect` if needed.
-2. Open `Setup` tab and run one-time setup checks.
-3. Open `Run` tab and configure mode/files/options.
-4. Click `Run batch`.
+2. Open `Step 0: Setup` and run one-time setup checks.
+3. Open `Step 0.5: Network profiles` to manage/import templates.
+4. Open `Step 4: Run` and execute batch.
 5. Use artifact links to download Excel/JSONL outputs.
 
-## Manual network template creation in Setup
+## Manual network template creation in Step 0.5
 
 You can create the network template manually from a copied request, without running browser capture mode.
 
-In the **Setup** tab:
+In **Step 0: Setup** and **Step 0.5: Network profiles**:
 
-1. Open **Import a copied request manually**.
-2. Paste one of the following:
+1. Select the active profile in **Step 0: Setup**.
+2. Open **Import copied request into selected profile** in Step 0.5.
+3. Paste one of the following:
 	- A full `fetch(...)` call
 	- A PowerShell `Invoke-WebRequest` snippet
 	- A raw JSON request body
-3. Click **Create network template**.
-4. The UI re-runs setup checks and shows status immediately.
+4. Click **Import into selected profile**.
+5. Run **Check setup readiness** in Step 0.
 
-By default this writes to `outputs/network-log-ui-full.json` (or whatever path is configured in the network template field).
+This writes to the selected profile template path (commonly `outputs/network-log-ui-full.json`).
 
 ### Sanitization behavior
 

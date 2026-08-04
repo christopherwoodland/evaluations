@@ -25,12 +25,53 @@ function extractQuery(body) {
   return "";
 }
 
+function extractProvidedReferences(promptText) {
+  const text = String(promptText || "");
+  const marker = "Provided document references:";
+  const idx = text.indexOf(marker);
+  if (idx < 0) return [];
+
+  const lines = text.slice(idx + marker.length).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const refs = [];
+  let current = null;
+
+  for (const line of lines) {
+    if (/^Please provide citations\/sources/i.test(line)) break;
+    if (line.startsWith("- Source title:")) {
+      if (current) refs.push(current);
+      current = { title: line.replace(/^- Source title:\s*/i, "").trim() };
+      continue;
+    }
+    if (/^URL:/i.test(line)) {
+      if (!current) current = {};
+      current.url = line.replace(/^URL:\s*/i, "").trim();
+      continue;
+    }
+    if (/^Ref path:/i.test(line)) {
+      if (!current) current = {};
+      current.ref = line.replace(/^Ref path:\s*/i, "").trim();
+      continue;
+    }
+  }
+
+  if (current) refs.push(current);
+  return refs.filter((ref) => ref.title || ref.url || ref.ref);
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && req.url === "/chat") {
     try {
       const body = await readJsonBody(req);
       const query = extractQuery(body);
-      const content = `MOCK_REPLY: ${query || "(empty query)"}`;
+      const refs = extractProvidedReferences(query);
+      const sourceBlock = refs.length
+        ? `\n\n**Sources**\n\n${refs.map((ref) => [
+            `- Source title: ${ref.title || "Unknown"}`,
+            ref.url ? `URL: ${ref.url}` : "",
+            ref.ref ? `Ref path: ${ref.ref}` : "",
+          ].filter(Boolean).join("\n")).join("\n")}`
+        : "";
+      const content = `MOCK_REPLY: ${query || "(empty query)"}${sourceBlock}`;
 
       const payload = {
         choices: [

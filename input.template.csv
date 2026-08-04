@@ -1,3 +1,3 @@
-query,response
-What is the capital of France?,Paris
-Explain what REST APIs are in one sentence.,REST APIs are interfaces that expose resources over HTTP methods.
+query,response,sources_json
+What is the capital of France?,Paris,
+Explain what REST APIs are in one sentence.,REST APIs are interfaces that expose resources over HTTP methods.,"[{""title"":""WRA Co Primer and Bullet Help"",""url"":""https://cartridge-corner.com/wrahelp.htm"",""ref_path"":""wra_primer_bullet_help.json"",""pages"":""Pages 2-3"",""scope"":""personal document scope""},{""title"":""Common Bullet Types"",""url"":""https://cartridge-corner.com/Bullets.html"",""ref_path"":""common_bullet_types.json"",""pages"":""Page 1"",""scope"":""personal document scope""}]"

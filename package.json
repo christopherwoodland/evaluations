@@ -14,7 +14,8 @@
     "python-ui:setup": "powershell -ExecutionPolicy Bypass -File ./python-ui/start-python-ui.ps1",
     "smoke": "node src/smoke-test.mjs",
     "smoke:api": "node src/smoke-test-api.mjs",
-    "smoke:all": "npm run smoke && npm run smoke:api"
+    "smoke:source-refs": "node src/smoke-test-source-refs.mjs",
+    "smoke:all": "npm run smoke && npm run smoke:api && npm run smoke:source-refs"
   },
   "dependencies": {
     "dotenv": "^16.6.1",

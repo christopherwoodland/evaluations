@@ -100,6 +100,32 @@ app.get("/api/network-template-profiles", (_, res) => {
   });
 });
 
+app.get("/api/network-template-profile-request", (req, res) => {
+  try {
+    const profileId = String(req.query?.profileId || "").trim();
+    if (!profileId) {
+      return res.status(400).json({ ok: false, error: "profileId is required." });
+    }
+
+    const state = getNetworkTemplateProfileState();
+    const profile = state.profiles.find((p) => p.id === profileId);
+    if (!profile) {
+      return res.status(404).json({ ok: false, error: `Profile not found: ${profileId}` });
+    }
+
+    const preview = extractTemplateRequestPreview(profile.networkTemplate);
+    return res.json({
+      ok: true,
+      profileId,
+      networkTemplate: profile.networkTemplate,
+      source: preview.source,
+      requestText: preview.requestText,
+    });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message || String(error) });
+  }
+});
+
 app.post("/api/network-template-profiles/upsert", (req, res) => {
   try {
     const body = req.body || {};
@@ -1012,6 +1038,37 @@ function extractModelInfoFromTemplatePath(networkTemplatePath) {
     return extractModelInfoFromBody(payload);
   } catch {
     return { modelId: "", modelName: "" };
+  }
+}
+
+function extractTemplateRequestPreview(networkTemplatePath) {
+  const templateAbs = safeResolveWorkspacePath(String(networkTemplatePath || ""));
+  if (!fs.existsSync(templateAbs)) {
+    throw new Error(`Template file not found: ${networkTemplatePath}`);
+  }
+
+  const raw = fs.readFileSync(templateAbs, "utf8");
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { source: "template.raw", requestText: raw };
+  }
+
+  if (!Array.isArray(parsed)) {
+    return { source: "template.json", requestText: JSON.stringify(parsed, null, 2) };
+  }
+
+  const req = parsed.find((e) => e?.kind === "request" && typeof e?.postData === "string" && String(e.postData).trim());
+  if (!req?.postData) {
+    return { source: "template.events", requestText: JSON.stringify(parsed, null, 2) };
+  }
+
+  const postData = String(req.postData || "").trim();
+  try {
+    return { source: "request.postData.json", requestText: JSON.stringify(JSON.parse(postData), null, 2) };
+  } catch {
+    return { source: "request.postData.raw", requestText: postData };
   }
 }
 
