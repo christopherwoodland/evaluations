@@ -93,11 +93,36 @@ h1 {
 
 .steps {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   gap: 0.6rem;
   padding: 1rem;
   border-bottom: 1px solid var(--line);
   background: rgba(0, 0, 0, 0.15);
+}
+
+.collapsible-run {
+  margin-top: 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.16);
+  overflow: hidden;
+}
+
+.collapsible-run summary {
+  cursor: pointer;
+  padding: 0.62rem 0.72rem;
+  color: #c7d9e4;
+  background: #1b2835;
+  border-bottom: 1px solid rgba(35, 51, 66, 0.85);
+  font-weight: 600;
+}
+
+.collapsible-run > :not(summary) {
+  padding: 0.72rem;
+}
+
+.run-actions-row {
+  margin-bottom: 0.5rem;
 }
 
 .step {
@@ -108,6 +133,17 @@ h1 {
   color: var(--muted);
   font-size: 0.9rem;
   transition: 260ms ease;
+  cursor: pointer;
+}
+
+.step:hover {
+  border-color: rgba(18, 179, 168, 0.4);
+  color: #d4e4ee;
+}
+
+.step:focus-visible {
+  outline: 2px solid rgba(18, 179, 168, 0.45);
+  outline-offset: 2px;
 }
 
 .step span {
@@ -167,6 +203,211 @@ h2 {
   margin: 0.25rem 0;
 }
 
+.setup-profile-grid {
+  margin-top: 0.85rem;
+  align-items: stretch;
+}
+
+.setup-profile-card {
+  border: 1px solid rgba(35, 51, 66, 0.95);
+  border-radius: 12px;
+  padding: 0.65rem 0.72rem 0.72rem;
+  background:
+    linear-gradient(160deg, rgba(14, 24, 33, 0.9), rgba(11, 19, 27, 0.86)),
+    radial-gradient(120% 120% at 100% 0%, rgba(18, 179, 168, 0.08), transparent 55%);
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.setup-profile-card:focus-within {
+  border-color: rgba(18, 179, 168, 0.55);
+  box-shadow: 0 0 0 1px rgba(18, 179, 168, 0.22) inset;
+}
+
+.setup-profile-card span {
+  color: #c4d7e3;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.setup-profile-card small {
+  color: #9cb0be;
+  line-height: 1.35;
+}
+
+.profile-manager-summary {
+  justify-content: center;
+}
+
+.profile-manager-box {
+  margin-top: 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.8rem;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.profile-manager-box h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.98rem;
+}
+
+.profile-editor-wrap {
+  border: 1px solid rgba(35, 51, 66, 0.9);
+  border-radius: 10px;
+  padding: 0.7rem;
+  background: rgba(10, 18, 26, 0.5);
+}
+
+.profile-manager-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.55rem;
+}
+
+.manager-mode-badge {
+  font-size: 0.76rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.26rem 0.62rem;
+  color: #b8cfde;
+  background: #11202b;
+}
+
+.manager-selected-profile-text {
+  margin-bottom: 0.55rem;
+  color: #b5d8e8;
+  font-size: 0.86rem;
+}
+
+.profile-manager-actions {
+  margin-top: 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.profile-delete-actions {
+  margin-top: 0.45rem;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.55rem;
+}
+
+.delete-confirm-row {
+  margin-right: 0.4rem;
+  font-size: 0.9rem;
+  color: #d9e6ee;
+}
+
+.delete-confirm-row input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--brand);
+}
+
+.profile-table-wrap {
+  margin: 0 0 0.8rem;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #0d1720;
+}
+
+.profile-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 740px;
+  font-size: 0.84rem;
+}
+
+.profile-table th,
+.profile-table td {
+  border-bottom: 1px solid rgba(35, 51, 66, 0.8);
+  padding: 0.45rem 0.55rem;
+  text-align: left;
+  color: #d5e6f0;
+}
+
+.profile-table tr.is-selected td {
+  background: rgba(18, 179, 168, 0.13);
+  border-bottom-color: rgba(18, 179, 168, 0.35);
+}
+
+.profile-table tr.is-selected td:first-child {
+  box-shadow: inset 3px 0 0 rgba(18, 179, 168, 0.8);
+}
+
+.profile-table th:first-child,
+.profile-table td:first-child {
+  width: 90px;
+}
+
+#deleteNetworkProfileBtn {
+  min-width: 220px;
+}
+
+#createNetworkProfileBtn,
+#updateNetworkProfileBtn,
+#setDefaultNetworkProfileBtn,
+#newNetworkProfileBtn {
+  min-height: 42px;
+  width: 100%;
+}
+
+.profile-table th {
+  color: #98afbe;
+  background: #101b25;
+  font-weight: 600;
+}
+
+.profile-save-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.profile-manage-row {
+  margin-top: 0.35rem;
+}
+
+.profile-manage-row .ghost {
+  min-height: 36px;
+}
+
+.profile-save-row input {
+  min-width: 0;
+}
+
+#saveNetworkProfileBtn {
+  white-space: nowrap;
+  min-width: 128px;
+  font-weight: 600;
+  border-color: rgba(18, 179, 168, 0.35);
+}
+
+#saveNetworkProfileBtn:hover {
+  color: #001613;
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--brand), #5be0d7);
+}
+
+#networkProfileStatus {
+  display: block;
+  margin-top: 0.2rem;
+  color: #d7e3eb;
+  font-size: 0.82rem;
+}
+
+.warn-text {
+  color: #ffb4aa;
+  min-height: 1.1rem;
+}
+
 .manual-template {
   margin: 0.9rem 0;
   padding-top: 0.8rem;
@@ -177,6 +418,33 @@ h2 {
   margin-bottom: 0.7rem;
   cursor: pointer;
   color: var(--muted);
+}
+
+.import-sync-hint {
+  margin: 0.2rem 0 0.55rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid rgba(18, 179, 168, 0.35);
+  border-radius: 9px;
+  background: rgba(18, 179, 168, 0.08);
+  color: #c7ebe6;
+  font-size: 0.83rem;
+}
+
+.import-compare-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+#currentProfileRequestText {
+  background: rgba(9, 18, 26, 0.9);
+  border-color: rgba(96, 129, 153, 0.6);
+  color: #b8cad7;
+}
+
+#currentProfileRequestText:focus {
+  outline: none;
+  border-color: rgba(96, 129, 153, 0.6);
 }
 
 .manual-template textarea {
@@ -260,6 +528,11 @@ h2 {
 .field span {
   color: var(--muted);
   font-size: 0.88rem;
+}
+
+.field small {
+  color: #9cb0be;
+  line-height: 1.35;
 }
 
 input,
@@ -514,6 +787,11 @@ button:disabled {
   margin-bottom: 0.8rem;
 }
 
+#precheckBtn {
+  width: 100%;
+  margin-bottom: 0.8rem;
+}
+
 .status {
   padding: 0.6rem 0.7rem;
   border: 1px dashed var(--line);
@@ -645,12 +923,34 @@ button:disabled {
 @media (max-width: 900px) {
   .mode-grid,
   .two-col,
+  .import-compare-grid,
   .steps {
     grid-template-columns: 1fr;
   }
 
+  .profile-save-row {
+    grid-template-columns: 1fr;
+  }
+
+  #saveNetworkProfileBtn {
+    width: 100%;
+  }
+
   .step {
     text-align: left;
+  }
+}
+
+@media (max-width: 1050px) {
+  .steps {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 720px) {
+  #deleteNetworkProfileBtn {
+    width: 100%;
+    min-width: 0;
   }
 }
 

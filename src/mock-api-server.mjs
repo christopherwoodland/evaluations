@@ -30,7 +30,18 @@ const server = http.createServer(async (req, res) => {
     try {
       const body = await readJsonBody(req);
       const query = extractQuery(body);
-      const content = `MOCK_REPLY: ${query || "(empty query)"}`;
+      const sourceBlock = [
+        "",
+        "**Sources**",
+        "",
+        "- Source title: WRA Co Primer and Bullet Help",
+        "URL: https://cartridge-corner.com/wrahelp.htm",
+        "Ref path: wra_primer_bullet_help.json (Pages 2-3; personal document scope)",
+        "- Source title: Common Bullet Types",
+        "URL: https://cartridge-corner.com/Bullets.html",
+        "Ref path: common_bullet_types.json (Page 1; personal document scope)",
+      ].join("\n");
+      const content = `MOCK_REPLY: ${query || "(empty query)"}\n\n${sourceBlock}`;
 
       const payload = {
         choices: [

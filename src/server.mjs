@@ -18,6 +18,7 @@ const HOST = process.env.HOST || "127.0.0.1";
 const DEFAULT_CHAT_URL = process.env.CHAT_URL || "https://simplechatdemo-fjgpaqe7h6c7akbr.eastus-01.azurewebsites.net/chats";
 const DEFAULT_STATE_FILE = process.env.STATE_FILE || ".auth/storage-state.json";
 const DEFAULT_NETWORK_TEMPLATE = process.env.NETWORK_TEMPLATE || "outputs/network-log-ui-full.json";
+const DEFAULT_NETWORK_PROFILE_ID = process.env.NETWORK_TEMPLATE_PROFILE || "default";
 const DEFAULT_SELECTORS = process.env.SELECTORS_PATH || "selectors.example.json";
 const DEFAULT_OUTPUT_DIR = process.env.OUTPUT_DIR || "outputs";
 const DEFAULT_FOUNDRY_EXPORT_DIR = process.env.FOUNDRY_EXPORT_DIR || "foundry_exports";
@@ -33,12 +34,14 @@ const examplesDir = path.join(ROOT, "examples");
 const historyPath = path.join(outputsDir, "run-history.json");
 const lastRunPayloadPath = path.join(outputsDir, "last-run-payload.json");
 const modelContextPath = path.join(outputsDir, "model-context.json");
+const networkProfilesPath = path.join(outputsDir, "network-template-profiles.json");
 
 for (const dir of [uploadsDir, outputsDir, authDir, examplesDir]) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
 ensureExampleTemplate();
+ensureNetworkTemplateProfiles();
 
 const upload = multer({
   storage: multer.diskStorage({
@@ -64,9 +67,11 @@ app.get("/api/health", (_, res) => {
 });
 
 app.get("/api/files/defaults", (_, res) => {
+  const profileState = getNetworkTemplateProfileState();
   res.json({
     defaultStateFile: DEFAULT_STATE_FILE,
     defaultNetworkTemplate: DEFAULT_NETWORK_TEMPLATE,
+    defaultNetworkTemplateProfile: profileState.defaultProfileId,
     defaultSelectors: DEFAULT_SELECTORS,
     defaultChatUrl: DEFAULT_CHAT_URL,
     defaultOutputDir: DEFAULT_OUTPUT_DIR,
@@ -86,13 +91,158 @@ app.get("/api/files/defaults", (_, res) => {
   });
 });
 
+app.get("/api/network-template-profiles", (_, res) => {
+  const state = getNetworkTemplateProfileState();
+  res.json({
+    ok: true,
+    defaultProfileId: state.defaultProfileId,
+    profiles: withProfileRuntimeState(state.profiles),
+  });
+});
+
+app.get("/api/network-template-profile-request", (req, res) => {
+  try {
+    const profileId = String(req.query?.profileId || "").trim();
+    if (!profileId) {
+      return res.status(400).json({ ok: false, error: "profileId is required." });
+    }
+
+    const state = getNetworkTemplateProfileState();
+    const profile = state.profiles.find((p) => p.id === profileId);
+    if (!profile) {
+      return res.status(404).json({ ok: false, error: `Profile not found: ${profileId}` });
+    }
+
+    const preview = extractTemplateRequestPreview(profile.networkTemplate);
+    return res.json({
+      ok: true,
+      profileId,
+      networkTemplate: profile.networkTemplate,
+      source: preview.source,
+      requestText: preview.requestText,
+    });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message || String(error) });
+  }
+});
+
+app.post("/api/network-template-profiles/upsert", (req, res) => {
+  try {
+    const body = req.body || {};
+    const name = String(body.name || "").trim();
+    const networkTemplate = String(body.networkTemplate || "").trim();
+    if (!name) {
+      return res.status(400).json({ ok: false, error: "Profile name is required." });
+    }
+    if (!networkTemplate) {
+      return res.status(400).json({ ok: false, error: "networkTemplate is required." });
+    }
+
+    const normalizedTemplatePath = toWorkspaceRelativePath(safeResolveWorkspacePath(networkTemplate));
+
+    const requestedId = String(body.id || "").trim();
+    const detectedModel = extractModelInfoFromTemplatePath(normalizedTemplatePath);
+    const state = getNetworkTemplateProfileState();
+    const existingIdx = state.profiles.findIndex((p) => p.id === requestedId || p.name.toLowerCase() === name.toLowerCase());
+    const now = new Date().toISOString();
+
+    const nextProfile = {
+      id: requestedId || toProfileId(name),
+      name,
+      description: String(body.description || "").trim(),
+      networkTemplate: normalizedTemplatePath,
+      modelId: String(body.modelId || detectedModel.modelId || "").trim(),
+      modelName: String(body.modelName || detectedModel.modelName || "").trim(),
+      updatedAt: now,
+    };
+
+    if (existingIdx >= 0) {
+      const existing = state.profiles[existingIdx];
+      state.profiles[existingIdx] = {
+        ...existing,
+        ...nextProfile,
+        id: existing.id,
+        createdAt: existing.createdAt || now,
+      };
+    } else {
+      state.profiles.push({
+        ...nextProfile,
+        createdAt: now,
+      });
+    }
+
+    if (body.setDefault === true || body.setDefault === "true") {
+      state.defaultProfileId = existingIdx >= 0 ? state.profiles[existingIdx].id : nextProfile.id;
+    }
+
+    saveNetworkTemplateProfileState(state);
+    return res.json({ ok: true, defaultProfileId: state.defaultProfileId, profiles: withProfileRuntimeState(state.profiles) });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message || String(error) });
+  }
+});
+
+app.post("/api/network-template-profiles/set-default", (req, res) => {
+  try {
+    const body = req.body || {};
+    const id = String(body.id || "").trim();
+    if (!id) {
+      return res.status(400).json({ ok: false, error: "Profile id is required." });
+    }
+
+    const state = getNetworkTemplateProfileState();
+    const exists = state.profiles.some((p) => p.id === id);
+    if (!exists) {
+      return res.status(404).json({ ok: false, error: `Profile not found: ${id}` });
+    }
+
+    state.defaultProfileId = id;
+    saveNetworkTemplateProfileState(state);
+    return res.json({ ok: true, defaultProfileId: state.defaultProfileId, profiles: withProfileRuntimeState(state.profiles) });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message || String(error) });
+  }
+});
+
+app.post("/api/network-template-profiles/delete", (req, res) => {
+  try {
+    const body = req.body || {};
+    const id = String(body.id || "").trim();
+    if (!id) {
+      return res.status(400).json({ ok: false, error: "Profile id is required." });
+    }
+
+    const state = getNetworkTemplateProfileState();
+    const idx = state.profiles.findIndex((p) => p.id === id);
+    if (idx < 0) {
+      return res.status(404).json({ ok: false, error: `Profile not found: ${id}` });
+    }
+    if (state.profiles.length <= 1) {
+      return res.status(400).json({ ok: false, error: "Cannot delete the last remaining profile." });
+    }
+
+    state.profiles.splice(idx, 1);
+    if (!state.profiles.some((p) => p.id === state.defaultProfileId)) {
+      state.defaultProfileId = state.profiles[0].id;
+    }
+    saveNetworkTemplateProfileState(state);
+
+    return res.json({ ok: true, defaultProfileId: state.defaultProfileId, profiles: withProfileRuntimeState(state.profiles) });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message || String(error) });
+  }
+});
+
 app.post("/api/precheck", async (req, res) => {
   try {
     const body = req.body || {};
     const mode = String(body.mode || "simplechat-api");
     const url = String(body.url || DEFAULT_CHAT_URL);
     const stateFile = String(body.stateFile || DEFAULT_STATE_FILE);
-    const networkTemplate = String(body.networkTemplate || DEFAULT_NETWORK_TEMPLATE);
+    const networkTemplate =
+      mode === "simplechat-api"
+        ? resolveNetworkTemplatePathFromBody(body)
+        : String(body.networkTemplate || DEFAULT_NETWORK_TEMPLATE);
     const apiUrl = String(body.apiUrl || process.env.API_URL || "");
     const headed = String(body.headed ?? "true").toLowerCase() !== "false";
 
@@ -153,7 +303,11 @@ app.post("/api/precheck", async (req, res) => {
     const ok = checks.every((c) => c.ok);
     return res.json({ ok, checks });
   } catch (error) {
-    return res.status(500).json({ ok: false, error: error.message || String(error) });
+    const msg = String(error?.message || error || "Precheck failed.");
+    const isValidationError =
+      msg.includes("Unknown network template profile") ||
+      msg.includes("Path must be within workspace root");
+    return res.status(isValidationError ? 400 : 500).json({ ok: false, error: msg });
   }
 });
 
@@ -192,13 +346,32 @@ app.post("/api/import-network-template", (req, res) => {
   try {
     const body = req.body || {};
     const requestText = String(body.requestText || "");
-    const networkTemplate = String(body.networkTemplate || DEFAULT_NETWORK_TEMPLATE);
+    const networkTemplate = resolveNetworkTemplatePathFromBody(body);
     const fallbackUrl = String(body.url || DEFAULT_CHAT_URL);
     const captured = parseManualChatRequest(requestText, fallbackUrl);
     const templateAbs = safeResolveWorkspacePath(networkTemplate);
+    const selectedProfileId = String(body.networkTemplateProfile || "").trim();
 
     ensureDir(path.dirname(templateAbs));
     fs.writeFileSync(templateAbs, JSON.stringify([captured], null, 2), "utf8");
+
+    if (selectedProfileId) {
+      const state = getNetworkTemplateProfileState();
+      const idx = state.profiles.findIndex((p) => p.id === selectedProfileId);
+      if (idx >= 0) {
+        const existing = state.profiles[idx];
+        const payload = JSON.parse(String(captured.postData || "{}"));
+        const modelInfo = extractModelInfoFromBody(payload);
+        state.profiles[idx] = {
+          ...existing,
+          networkTemplate: toWorkspaceRelativePath(templateAbs),
+          modelId: modelInfo.modelId,
+          modelName: modelInfo.modelName,
+          updatedAt: new Date().toISOString(),
+        };
+        saveNetworkTemplateProfileState(state);
+      }
+    }
 
     return res.json({
       ok: true,
@@ -502,6 +675,202 @@ function toWorkspaceRelativePath(absPath) {
   return path.relative(ROOT, absPath).replace(/\\/g, "/");
 }
 
+function tryNormalizeWorkspaceRelativePath(inputPath) {
+  try {
+    return toWorkspaceRelativePath(safeResolveWorkspacePath(String(inputPath || ""))).toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function ensureNetworkTemplateProfiles() {
+  if (fs.existsSync(networkProfilesPath)) return;
+  const now = new Date().toISOString();
+  const initial = {
+    defaultProfileId: DEFAULT_NETWORK_PROFILE_ID,
+    profiles: [
+      {
+        id: DEFAULT_NETWORK_PROFILE_ID,
+        name: "Default",
+        description: "Default network template profile",
+        networkTemplate: DEFAULT_NETWORK_TEMPLATE,
+        modelId: "",
+        modelName: "",
+        createdAt: now,
+        updatedAt: now,
+      },
+    ],
+  };
+  fs.writeFileSync(networkProfilesPath, JSON.stringify(initial, null, 2), "utf8");
+}
+
+function normalizeProfile(profile) {
+  if (!profile || typeof profile !== "object") return null;
+  const id = String(profile.id || "").trim();
+  const name = String(profile.name || "").trim();
+  const networkTemplate = String(profile.networkTemplate || "").trim();
+  if (!id || !name || !networkTemplate) return null;
+  return {
+    id,
+    name,
+    description: String(profile.description || "").trim(),
+    networkTemplate,
+    modelId: String(profile.modelId || "").trim(),
+    modelName: String(profile.modelName || "").trim(),
+    createdAt: String(profile.createdAt || "").trim(),
+    updatedAt: String(profile.updatedAt || "").trim(),
+  };
+}
+
+function saveNetworkTemplateProfileState(state) {
+  const payload = {
+    defaultProfileId: String(state?.defaultProfileId || DEFAULT_NETWORK_PROFILE_ID),
+    profiles: Array.isArray(state?.profiles) ? state.profiles : [],
+  };
+  ensureDir(path.dirname(networkProfilesPath));
+  fs.writeFileSync(networkProfilesPath, JSON.stringify(payload, null, 2), "utf8");
+}
+
+function withProfileRuntimeState(profiles) {
+  const list = Array.isArray(profiles) ? profiles : [];
+  return list.map((profile) => {
+    const p = profile && typeof profile === "object" ? profile : {};
+    const templatePath = String(p.networkTemplate || "");
+    const detected = extractModelInfoFromTemplatePath(templatePath);
+    let exists = false;
+    try {
+      exists = fs.existsSync(safeResolveWorkspacePath(templatePath));
+    } catch {
+      exists = false;
+    }
+    return {
+      ...p,
+      modelId: String(p.modelId || detected.modelId || "").trim(),
+      modelName: String(p.modelName || detected.modelName || "").trim(),
+      exists,
+    };
+  });
+}
+
+function getNetworkTemplateProfileState() {
+  ensureNetworkTemplateProfiles();
+  try {
+    const raw = fs.readFileSync(networkProfilesPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const profiles = Array.isArray(parsed?.profiles) ? parsed.profiles : [];
+    const normalized = profiles.map((p) => normalizeProfile(p)).filter(Boolean);
+
+    if (!normalized.length) {
+      const now = new Date().toISOString();
+      normalized.push({
+        id: DEFAULT_NETWORK_PROFILE_ID,
+        name: "Default",
+        description: "Default network template profile",
+        networkTemplate: DEFAULT_NETWORK_TEMPLATE,
+        modelId: "",
+        modelName: "",
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    const defaultId = String(parsed?.defaultProfileId || "").trim();
+    const hasDefault = normalized.some((p) => p.id === defaultId);
+    const state = {
+      defaultProfileId: hasDefault ? defaultId : normalized[0].id,
+      profiles: normalized,
+    };
+    saveNetworkTemplateProfileState(state);
+    return state;
+  } catch {
+    const now = new Date().toISOString();
+    const state = {
+      defaultProfileId: DEFAULT_NETWORK_PROFILE_ID,
+      profiles: [
+        {
+          id: DEFAULT_NETWORK_PROFILE_ID,
+          name: "Default",
+          description: "Default network template profile",
+          networkTemplate: DEFAULT_NETWORK_TEMPLATE,
+          modelId: "",
+          modelName: "",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    };
+    saveNetworkTemplateProfileState(state);
+    return state;
+  }
+}
+
+function toProfileId(name) {
+  return String(name || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || `profile-${Date.now()}`;
+}
+
+function resolveProfileFromBody(body) {
+  const selected = String(body?.networkTemplateProfile || "").trim();
+  const state = getNetworkTemplateProfileState();
+  if (!selected) {
+    return state.profiles.find((p) => p.id === state.defaultProfileId) || state.profiles[0] || null;
+  }
+  return state.profiles.find((p) => p.id === selected) || null;
+}
+
+function resolveNetworkTemplatePathFromBody(body) {
+  const selected = String(body?.networkTemplateProfile || "").trim();
+  if (selected) {
+    const profile = resolveProfileFromBody(body);
+    if (!profile) {
+      throw new Error(`Unknown network template profile: ${selected}`);
+    }
+    return profile.networkTemplate;
+  }
+  return String(body?.networkTemplate || DEFAULT_NETWORK_TEMPLATE);
+}
+
+function resolveProfileForTemplate(networkTemplatePath, selectedProfileId = "") {
+  try {
+    const relPath = toWorkspaceRelativePath(safeResolveWorkspacePath(networkTemplatePath));
+    const relPathNormalized = tryNormalizeWorkspaceRelativePath(networkTemplatePath);
+    const state = getNetworkTemplateProfileState();
+    const preferred = selectedProfileId ? state.profiles.find((p) => p.id === selectedProfileId) : null;
+    const match =
+      preferred ||
+      state.profiles.find((p) => {
+        const candidate = tryNormalizeWorkspaceRelativePath(String(p.networkTemplate || ""));
+        return Boolean(candidate) && candidate === relPathNormalized;
+      });
+    if (!match) {
+      return {
+        id: "",
+        name: "",
+        networkTemplate: relPath,
+        modelId: "",
+        modelName: "",
+      };
+    }
+    return {
+      id: match.id,
+      name: match.name,
+      networkTemplate: match.networkTemplate,
+      modelId: String(match.modelId || ""),
+      modelName: String(match.modelName || ""),
+    };
+  } catch {
+    return {
+      id: "",
+      name: "",
+      networkTemplate: String(networkTemplatePath || ""),
+      modelId: "",
+      modelName: "",
+    };
+  }
+}
+
 function buildSafeCommand(args) {
   const redactedFlags = new Set(["--api-headers", "--api-body-template"]);
   const safeArgs = [];
@@ -518,9 +887,9 @@ function buildSafeCommand(args) {
   return `node ${safeArgs.join(" ")}`;
 }
 
-function buildRunContext({ mode, url, networkTemplatePath, apiUrl, apiMethod, apiHeadersRaw, apiBodyTemplateRaw }) {
+function buildRunContext({ mode, url, networkTemplatePath, networkTemplateProfile, apiUrl, apiMethod, apiHeadersRaw, apiBodyTemplateRaw }) {
   if (mode === "simplechat-api") {
-    return buildSimpleChatRunContext(url, networkTemplatePath);
+    return buildSimpleChatRunContext(url, networkTemplatePath, networkTemplateProfile);
   }
   if (mode === "api") {
     return buildApiModeRunContext(apiUrl, apiMethod, apiHeadersRaw, apiBodyTemplateRaw);
@@ -534,7 +903,8 @@ function buildRunContext({ mode, url, networkTemplatePath, apiUrl, apiMethod, ap
   };
 }
 
-function buildSimpleChatRunContext(url, networkTemplatePath) {
+function buildSimpleChatRunContext(url, networkTemplatePath, networkTemplateProfile = "") {
+  const profileInfo = resolveProfileForTemplate(networkTemplatePath, networkTemplateProfile);
   try {
     const templateAbs = safeResolveWorkspacePath(networkTemplatePath);
     const events = JSON.parse(fs.readFileSync(templateAbs, "utf8"));
@@ -546,6 +916,7 @@ function buildSimpleChatRunContext(url, networkTemplatePath) {
       return {
         mode: "simplechat-api",
         model: "unknown",
+        network_template_profile: profileInfo,
         exampleRequest: { note: "No /api/chat/stream request found in network template." },
       };
     }
@@ -565,6 +936,7 @@ function buildSimpleChatRunContext(url, networkTemplatePath) {
       model: modelName || model,
       model_id: model,
       model_name: modelName || "",
+      network_template_profile: profileInfo,
       exampleRequest: sanitizeObject({
         method: req.method || "POST",
         url: `${new URL(url).origin}/api/chat/stream`,
@@ -584,6 +956,7 @@ function buildSimpleChatRunContext(url, networkTemplatePath) {
       model: modelName || modelId,
       model_id: modelId,
       model_name: modelName || "",
+      network_template_profile: profileInfo,
       exampleRequest: { note: "Could not parse network template for request preview." },
     };
   }
@@ -633,6 +1006,72 @@ function detectModelFromBody(body) {
   return "unknown";
 }
 
+function extractModelInfoFromBody(body) {
+  const modelId = String(detectModelFromBody(body) || "").trim();
+  const nameCandidates = [
+    body?.model_name,
+    body?.model_deployment,
+    body?.deployment_name,
+    body?.deployment,
+    body?.model,
+  ];
+  const modelName =
+    nameCandidates.find((v) => typeof v === "string" && v.trim())?.trim() ||
+    (modelId && !isGuidLike(modelId) ? modelId : "");
+
+  return {
+    modelId: modelId === "unknown" ? "" : modelId,
+    modelName: String(modelName || ""),
+  };
+}
+
+function extractModelInfoFromTemplatePath(networkTemplatePath) {
+  try {
+    const templateAbs = safeResolveWorkspacePath(String(networkTemplatePath || ""));
+    if (!fs.existsSync(templateAbs)) return { modelId: "", modelName: "" };
+    const events = JSON.parse(fs.readFileSync(templateAbs, "utf8"));
+    const req = Array.isArray(events)
+      ? events.find((e) => e?.kind === "request" && String(e?.url || "").includes("/api/chat/stream") && e?.postData)
+      : null;
+    if (!req?.postData) return { modelId: "", modelName: "" };
+    const payload = JSON.parse(String(req.postData));
+    return extractModelInfoFromBody(payload);
+  } catch {
+    return { modelId: "", modelName: "" };
+  }
+}
+
+function extractTemplateRequestPreview(networkTemplatePath) {
+  const templateAbs = safeResolveWorkspacePath(String(networkTemplatePath || ""));
+  if (!fs.existsSync(templateAbs)) {
+    throw new Error(`Template file not found: ${networkTemplatePath}`);
+  }
+
+  const raw = fs.readFileSync(templateAbs, "utf8");
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { source: "template.raw", requestText: raw };
+  }
+
+  if (!Array.isArray(parsed)) {
+    return { source: "template.json", requestText: JSON.stringify(parsed, null, 2) };
+  }
+
+  const req = parsed.find((e) => e?.kind === "request" && typeof e?.postData === "string" && String(e.postData).trim());
+  if (!req?.postData) {
+    return { source: "template.events", requestText: JSON.stringify(parsed, null, 2) };
+  }
+
+  const postData = String(req.postData || "").trim();
+  try {
+    return { source: "request.postData.json", requestText: JSON.stringify(JSON.parse(postData), null, 2) };
+  } catch {
+    return { source: "request.postData.raw", requestText: postData };
+  }
+}
+
 function sanitizeObject(value) {
   if (Array.isArray(value)) {
     return value.map((v) => sanitizeObject(v));
@@ -662,6 +1101,12 @@ function sanitizeObject(value) {
 async function executeRunFromRequest({ body, inputPathAbs, uploadedInputPath, files = {} }) {
   const mode = String(body.mode || "simplechat-api");
   const args = ["src/run-chat-runner.mjs", "--mode", mode, "--input", inputPathAbs];
+  const selectedProfileId = String(body.networkTemplateProfile || "").trim();
+  const selectedProfile = selectedProfileId ? resolveProfileFromBody(body) : null;
+  const resolvedTemplatePath =
+    mode === "simplechat-api"
+      ? resolveNetworkTemplatePathFromBody(body)
+      : String(body.networkTemplate || DEFAULT_NETWORK_TEMPLATE);
 
   const add = (key, val) => {
     if (val === undefined || val === null || val === "") return;
@@ -689,7 +1134,13 @@ async function executeRunFromRequest({ body, inputPathAbs, uploadedInputPath, fi
   const runId = new Date().toISOString().replace(/[.:]/g, "-");
 
   if (mode === "simplechat-api") {
-    const netTemplate = files.networkTemplateFile?.[0]?.path || body.networkTemplate || DEFAULT_NETWORK_TEMPLATE;
+    add("network-template-profile-id", selectedProfileId || "");
+    add("network-template-profile-name", selectedProfile?.name || "");
+    add("network-template-profile-path", resolvedTemplatePath || "");
+  }
+
+  if (mode === "simplechat-api") {
+    const netTemplate = files.networkTemplateFile?.[0]?.path || resolvedTemplatePath;
     add("network-template", netTemplate);
   }
 
@@ -715,7 +1166,8 @@ async function executeRunFromRequest({ body, inputPathAbs, uploadedInputPath, fi
   const runContext = buildRunContext({
     mode,
     url: body.url || DEFAULT_CHAT_URL,
-    networkTemplatePath: files.networkTemplateFile?.[0]?.path || body.networkTemplate || DEFAULT_NETWORK_TEMPLATE,
+    networkTemplatePath: files.networkTemplateFile?.[0]?.path || resolvedTemplatePath,
+    networkTemplateProfile: selectedProfileId,
     apiUrl: body.apiUrl || process.env.API_URL || "",
     apiMethod: body.apiMethod || process.env.API_METHOD || "POST",
     apiHeadersRaw: body.apiHeaders || "",
@@ -762,6 +1214,7 @@ async function executeRunFromRequest({ body, inputPathAbs, uploadedInputPath, fi
 
   const persistPayload = {
     ...body,
+    networkTemplateProfile: selectedProfileId,
     inputPath: toWorkspaceRelativePath(uploadedInputPath),
   };
   fs.writeFileSync(lastRunPayloadPath, JSON.stringify(persistPayload, null, 2), "utf8");

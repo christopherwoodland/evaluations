@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { execSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import minimist from "minimist";
 import xlsx from "xlsx";
 import { chromium, request } from "playwright";
@@ -461,6 +462,18 @@ function normalizeCitation(entry) {
       out[key] = String(entry[key]);
     }
   }
+  for (const [targetKey, candidateKeys] of Object.entries({
+    ref_path: ["ref_path", "refPath", "path"],
+    pages: ["pages", "page_range", "ref_pages", "refPages"],
+    scope: ["scope", "ref_scope", "refScope"],
+  })) {
+    for (const key of candidateKeys) {
+      if (entry[key] != null && String(entry[key]).trim() !== "") {
+        out[targetKey] = String(entry[key]).trim();
+        break;
+      }
+    }
+  }
   if (!Object.keys(out).length) return null;
   return out;
 }
@@ -484,23 +497,95 @@ function extractCitationsFromResponseText(text) {
   const lines = input.split(/\r?\n/);
   const out = [];
   const urlRx = /https?:\/\/[^\s)\]]+/gi;
+  let current = null;
+
+  function pushCurrent() {
+    const normalized = normalizeCitation(current);
+    if (normalized) out.push(normalized);
+    current = null;
+  }
 
   for (const rawLine of lines) {
     const line = String(rawLine || "").trim();
     if (!line) continue;
+
+    if (/^\*\*sources\*\*$/i.test(line) || /^sources\s*:? ?$/i.test(line)) {
+      continue;
+    }
+
+    const bulletTitleMatch = line.match(/^[-*]\s*(?:source\s+title\s*:\s*)?(.+)$/i);
+    if (bulletTitleMatch && !/^[-*]\s*https?:\/\//i.test(line)) {
+      pushCurrent();
+      current = { title: String(bulletTitleMatch[1] || "").trim() };
+      continue;
+    }
+
+    const sourceTitleMatch = line.match(/^source\s+title\s*:\s*(.+)$/i);
+    if (sourceTitleMatch) {
+      if (!current) current = {};
+      current.title = String(sourceTitleMatch[1] || "").trim();
+      continue;
+    }
+
+    const urlLabelMatch = line.match(/^url\s*:\s*(https?:\/\/\S+)/i);
+    if (urlLabelMatch) {
+      if (!current) current = {};
+      current.url = String(urlLabelMatch[1] || "").trim();
+      continue;
+    }
+
+    const refPathMatch = line.match(/^ref\s+path\s*:\s*(.+)$/i);
+    if (refPathMatch) {
+      if (!current) current = {};
+      const refParts = parseRefPathDetails(refPathMatch[1]);
+      current.ref_path = refParts.ref_path;
+      if (refParts.pages) current.pages = refParts.pages;
+      if (refParts.scope) current.scope = refParts.scope;
+      continue;
+    }
+
     const matches = line.match(urlRx);
     if (!matches?.length) continue;
 
-    // Keep line text and first URL as normalized citation fallback.
     const firstUrl = String(matches[0] || "").trim();
     const cleanedText = line.replace(/^[-*\d.\s]+/, "").trim();
+    if (current) {
+      current.url = current.url || firstUrl;
+      if (!current.text && cleanedText && cleanedText !== firstUrl) {
+        current.text = cleanedText;
+      }
+      continue;
+    }
+
     out.push({
       url: firstUrl,
       text: cleanedText || firstUrl,
     });
   }
 
+  pushCurrent();
+
   return dedupeCitations(out);
+}
+
+function summarizeSimpleChatPayloadForLog(payload) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const clone = { ...source };
+
+  // Avoid huge log blobs while still showing effective request shape.
+  if (clone.model_icon && typeof clone.model_icon === "object") {
+    const icon = { ...clone.model_icon };
+    if (typeof icon.value === "string") {
+      icon.value = `[omitted data-uri, length=${icon.value.length}]`;
+    }
+    clone.model_icon = icon;
+  }
+
+  if (Array.isArray(clone.active_public_workspace_ids)) {
+    clone.active_public_workspace_ids = `[${clone.active_public_workspace_ids.length} ids]`;
+  }
+
+  return clone;
 }
 
 function shouldEnableWebSources(contextValue) {
@@ -509,10 +594,45 @@ function shouldEnableWebSources(contextValue) {
   return /\b(web|internet|search|source|sources|grounded)\b/.test(text);
 }
 
+function parseRefPathDetails(value) {
+  const text = String(value || "").trim();
+  if (!text) return { ref_path: "", pages: "", scope: "" };
+
+  const match = text.match(/^(.*?)(?:\s*\((.*)\))?$/);
+  const ref_path = String(match?.[1] || text).trim();
+  const detail = String(match?.[2] || "").trim();
+  let pages = "";
+  let scope = "";
+
+  if (detail) {
+    for (const part of detail.split(/\s*;\s*/)) {
+      if (!pages && /\bpage/i.test(part)) {
+        pages = String(part).trim();
+      } else if (!scope) {
+        scope = String(part).trim();
+      }
+    }
+  }
+
+  return { ref_path, pages, scope };
+}
+
 function withCitationInstruction(query) {
   const base = String(query || "").trim();
   if (!base) return base;
-  return `${base}\n\nPlease provide citations/sources for your answer. Include a \"Sources\" section with source title and URL for each factual claim. If no verifiable sources are available, explicitly state \"No sources available.\"`;
+  const tail = [
+    'Please provide citations/sources for your answer.',
+    'At the end of the answer, include a markdown heading exactly named "**Sources**".',
+    'For each cited source, use exactly this 3-line block format:',
+    '- Source title: <title>',
+    'URL: <url>',
+    'Ref path: <ref path>',
+    'If page or scope metadata exists in the source you are citing, append it to the Ref path line in parentheses, for example: Ref path: file.json (Pages 2-3; personal document scope).',
+    'Do not collapse these onto one line and do not omit labels.',
+    'Only include a Ref path when the response itself is grounded enough to provide one.',
+    'If no verifiable sources are available, explicitly state "No sources available."',
+  ].join(" ");
+  return [base, tail].filter(Boolean).join("\n\n");
 }
 
 function tryExec(command, cwd) {
@@ -793,7 +913,7 @@ function writeOutputs({ results, outputDir, baseName, jsonlOptions, metadata }) 
 
   const lines = results.map((r, idx) =>
     {
-      const contextVal = r.context_value ?? getFieldCaseInsensitive(r, ["context", "retrieved_context", "source_context"]);
+      const contextVal = r.context ?? r.context_value ?? getFieldCaseInsensitive(r, ["context", "retrieved_context", "source_context"]);
       const base = {
         [opts.queryKey]: r.query,
         [opts.responseKey]: r.model_response,
@@ -815,6 +935,8 @@ function writeOutputs({ results, outputDir, baseName, jsonlOptions, metadata }) 
           status: r.status,
           error: r.error,
           captured_at_utc: r.captured_at_utc,
+          network_template_profile_id: metadata?.extra?.network_template_profile_id || "",
+          network_template_profile_name: metadata?.extra?.network_template_profile_name || "",
         };
       }
 
@@ -833,6 +955,19 @@ function writeOutputs({ results, outputDir, baseName, jsonlOptions, metadata }) 
   fs.writeFileSync(outJsonl, lines.join("\n"), "utf8");
 
   return { outXlsx, outJsonl, summary: { totalRows, okRows, errorRows, citationRows } };
+}
+
+function renderApiBodyTemplate(template, promptText) {
+  const rawTemplate = String(template || "");
+  const prompt = String(promptText || "");
+  if (!rawTemplate) {
+    return { messages: [{ role: "user", content: prompt }] };
+  }
+
+  const escapedPrompt = JSON.stringify(prompt);
+  const withQuotedPlaceholder = rawTemplate.replace(/"\{\{\s*query\s*\}\}"/g, escapedPrompt);
+  const replaced = withQuotedPlaceholder.replace(/\{\{\s*query\s*\}\}/g, prompt);
+  return JSON.parse(replaced);
 }
 
 function validateRowsStrict({ rows, queryColumn, referenceColumn, contextColumn, jsonlConfig }) {
@@ -1168,7 +1303,7 @@ async function runUiMode({
         ...row,
         query,
         response: reference,
-        context_value: contextValue,
+        context: contextValue,
         model_response: "",
         citations_json: "[]",
         status: "skipped",
@@ -1194,7 +1329,7 @@ async function runUiMode({
 
       const prior = await getAssistantCount(page, selectors);
       const priorFallback = await getAssistantFallbackSnapshot(page);
-      await setPromptInInput(page, inputHit.locator, query);
+      await setPromptInInput(page, inputHit.locator, withCitationInstruction(query));
 
       const sentByButton = await safeClick(page, selectors.send);
       if (!sentByButton) {
@@ -1205,13 +1340,15 @@ async function runUiMode({
 
       const responseText = await waitForAssistantReply(page, selectors, prior, priorFallback, timeoutMs);
 
+      const citations = extractCitationsFromResponseText(responseText);
+
       results.push({
         ...row,
         query,
         response: reference,
-        context_value: contextValue,
+        context: contextValue,
         model_response: responseText,
-        citations_json: "[]",
+        citations_json: JSON.stringify(citations),
         status: "ok",
         error: "",
         row_data: JSON.stringify(row),
@@ -1231,7 +1368,7 @@ async function runUiMode({
         ...row,
         query,
         response: reference,
-        context_value: contextValue,
+        context: contextValue,
         model_response: "",
         citations_json: "[]",
         status: "error",
@@ -1306,7 +1443,7 @@ async function runApiMode({
         ...row,
         query,
         response: reference,
-        context_value: contextValue,
+        context: contextValue,
         model_response: "",
         citations_json: "[]",
         status: "skipped",
@@ -1319,9 +1456,10 @@ async function runApiMode({
 
     try {
       const requestStarted = Date.now();
+      const effectivePrompt = withCitationInstruction(query);
       const requestBody = apiBodyTemplate
-        ? JSON.parse(apiBodyTemplate.replace(/\{\{\s*query\s*\}\}/g, query))
-        : { messages: [{ role: "user", content: query }] };
+        ? renderApiBodyTemplate(apiBodyTemplate, effectivePrompt)
+        : { messages: [{ role: "user", content: effectivePrompt }] };
 
       const res = await fetch(apiUrl, {
         method: apiMethod,
@@ -1347,13 +1485,14 @@ async function runApiMode({
 
       const responseVal = deepGet(data, apiResponsePath || "choices.0.message.content");
       const responseText = typeof responseVal === "string" ? responseVal : JSON.stringify(responseVal ?? data);
-      const citations = extractCitations(data);
+      const structuredCitations = extractCitations(data);
+      const citations = structuredCitations.length ? structuredCitations : extractCitationsFromResponseText(responseText);
 
       results.push({
         ...row,
         query,
         response: reference,
-        context_value: contextValue,
+        context: contextValue,
         model_response: responseText,
         citations_json: JSON.stringify(citations),
         status: "ok",
@@ -1372,7 +1511,7 @@ async function runApiMode({
         ...row,
         query,
         response: reference,
-        context_value: contextValue,
+        context: contextValue,
         model_response: "",
         citations_json: "[]",
         status: "error",
@@ -1466,13 +1605,15 @@ async function runSimpleChatApiMode({
     const query = String(row[queryColumn] ?? "").trim();
     const reference = String(row[referenceColumn] ?? "").trim();
     const contextValue = contextColumn ? String(row[contextColumn] ?? "").trim() : "";
+    let requestPreviewJson = "";
 
     if (!query) {
       results.push({
         ...row,
         query,
         response: reference,
-        context_value: contextValue,
+        context: contextValue,
+        request_json: requestPreviewJson,
         model_response: "",
         citations_json: "[]",
         status: "skipped",
@@ -1508,6 +1649,16 @@ async function runSimpleChatApiMode({
         conversation_id: conversationId,
       };
 
+      const requestPreview = {
+        method: "POST",
+        url: `${apiBase}/api/chat/stream`,
+        body: summarizeSimpleChatPayloadForLog(payload),
+      };
+      requestPreviewJson = JSON.stringify(requestPreview);
+      console.log(
+        `Row ${i + 1}/${rows.length}: request preview -> ${requestPreviewJson}`,
+      );
+
       const streamRes = await reqCtx.post("/api/chat/stream", {
         data: payload,
         timeout: timeoutMs,
@@ -1538,7 +1689,8 @@ async function runSimpleChatApiMode({
         ...row,
         query,
         response: reference,
-        context_value: contextValue,
+        context: contextValue,
+        request_json: requestPreviewJson,
         conversation_id: conversationId,
         model_response: responseText,
         citations_json: JSON.stringify(effectiveCitations || []),
@@ -1560,7 +1712,8 @@ async function runSimpleChatApiMode({
         ...row,
         query,
         response: reference,
-        context_value: contextValue,
+        context: contextValue,
+        request_json: requestPreviewJson,
         model_response: "",
         citations_json: "[]",
         status: "error",
@@ -1654,6 +1807,9 @@ async function main() {
       "run-id",
       "run-timestamp",
       "run-model",
+      "network-template-profile-id",
+      "network-template-profile-name",
+      "network-template-profile-path",
     ],
     boolean: [
       "headed",
@@ -1693,6 +1849,9 @@ async function main() {
       "run-id": "",
       "run-timestamp": "",
       "run-model": "unknown",
+      "network-template-profile-id": "",
+      "network-template-profile-name": "",
+      "network-template-profile-path": "",
     },
   });
 
@@ -1764,6 +1923,9 @@ async function main() {
       timezone: envSnapshot.timezone,
       locale: envSnapshot.locale,
       env_snapshot_json: JSON.stringify(envSnapshot),
+      network_template_profile_id: String(argv["network-template-profile-id"] || ""),
+      network_template_profile_name: String(argv["network-template-profile-name"] || ""),
+      network_template_profile_path: String(argv["network-template-profile-path"] || ""),
     },
   };
   const jsonlOptions = {
@@ -1858,7 +2020,19 @@ async function main() {
   console.log(`JSONL output: ${outputs.outJsonl}`);
 }
 
-main().catch((err) => {
-  console.error(`Fatal: ${err.message}`);
-  process.exitCode = 1;
-});
+export {
+  extractCitationsFromResponseText,
+  normalizeCitation,
+  parseRefPathDetails,
+  renderApiBodyTemplate,
+  withCitationInstruction,
+};
+
+const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isDirectRun) {
+  main().catch((err) => {
+    console.error(`Fatal: ${err.message}`);
+    process.exitCode = 1;
+  });
+}
