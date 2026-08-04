@@ -1,4 +1,4 @@
-# Python UI (Feature-Parity Wizard)
+# Evaluations Helper Wizard: Python UI
 
 This folder contains a Python UI for the Prompt Runner app.
 

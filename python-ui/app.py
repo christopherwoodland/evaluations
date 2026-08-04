@@ -409,7 +409,7 @@ def render_shell_header() -> None:
         """
 <div class="hero-wrap">
     <p class="hero-kicker">Prompt Flow</p>
-    <h1 class="hero-title">Prompt Runner Wizard</h1>
+    <h1 class="hero-title">Evaluations Helper Wizard</h1>
     <p class="hero-subtitle">Upload a spreadsheet, select run mode, execute, and export Excel + JSONL.</p>
 </div>
 <div class="steps-wrap">

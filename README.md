@@ -1,4 +1,4 @@
-﻿# Simple Chat Prompt Runner
+﻿# Evaluations Helper Wizard
 
 Batch-run prompts from CSV/XLSX input and export results to:
 
