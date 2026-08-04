@@ -106,7 +106,7 @@ In the sidebar, set the backend URL or use Auto-detect.
 - `ui`: browser automation mode
 - `api`: generic HTTP endpoint mode
 
-## Manual network template creation (Step 0.5)
+## Manual network template creation
 
 You can create `outputs/network-log-ui-full.json` without running a full UI capture.
 
@@ -120,15 +120,16 @@ This is useful when you already have a copied request from browser DevTools or P
 npm run wizard
 ```
 
-2. Open the wizard and go to **Step 0: One-time SimpleChat setup**.
-3. Pick the active run profile in **Profile for setup checks and runs**.
-4. In **Network profile manager**, use **Import copied request into selected profile**.
+2. Open the wizard and go to **Step 0: Setup**.
+3. Pick the active profile used for setup checks and runs.
+4. Go to **Step 1: Profiles**.
+5. In **Import copied request (updates template + model metadata)**, review the selected profile and import target.
 5. Paste one of the supported formats:
 	- Full `fetch(...)` call
 	- PowerShell `Invoke-WebRequest` snippet
 	- Raw JSON request body
-6. Click **Import into selected profile**.
-7. Click **Check setup readiness** to confirm the template is valid.
+6. Click **Import request + update model**.
+7. Return to **Step 0: Setup** and click **Check setup readiness**.
 
 ### Python Streamlit UI
 
@@ -145,10 +146,10 @@ streamlit run python-ui/app.py
 ```
 
 3. Open **Step 0: Setup** and choose the active profile.
-4. Open **Step 0.5: Network profiles**.
-5. In **Import copied request into selected profile**, paste `fetch(...)`, PowerShell, or raw JSON.
-6. Click **Import into selected profile**.
-7. Run **Check setup readiness** from Step 0.
+4. Open **Step 1: Profiles**.
+5. In **Import copied request (updates template + model metadata)**, paste `fetch(...)`, PowerShell, or raw JSON.
+6. Click **Import request + update model**.
+7. Return to **Step 0: Setup** and run **Check setup readiness**.
 
 ### What gets saved
 
@@ -178,6 +179,37 @@ Excel output includes:
 - `run_metadata` sheet: run-level data such as mode, model info, timestamps, duration, and backend/runtime details
 
 JSONL output includes one object per row with response plus optional fields based on run options (for example context/meta/ground_truth).
+
+When row-level source metadata is present, JSONL citations can also include:
+
+- `title`
+- `url`
+- `ref_path`
+- `pages`
+- `scope`
+
+The runner asks the model for an exact `**Sources**` block and preserves these reference fields when the cited source matches the row metadata.
+
+## Current UI flow
+
+### Web wizard
+
+1. **Step 0: Setup**
+2. **Step 1: Profiles**
+3. **Step 2: Mode**
+4. **Step 3: Files**
+5. **Step 4: Config**
+6. **Step 5: Run**
+7. **Step 6: History**
+
+### Python Streamlit wizard
+
+1. **Step 0: Setup**
+2. **Step 1: Profiles**
+3. **Step 2: Mode and files**
+4. **Step 3: Config**
+5. **Step 4: Run**
+6. **Step 5: History**
 
 ## Smoke tests
 

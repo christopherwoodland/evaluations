@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { execSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import minimist from "minimist";
 import xlsx from "xlsx";
 import { chromium, request } from "playwright";
@@ -2110,7 +2111,20 @@ async function main() {
   console.log(`JSONL output: ${outputs.outJsonl}`);
 }
 
-main().catch((err) => {
-  console.error(`Fatal: ${err.message}`);
-  process.exitCode = 1;
-});
+export {
+  extractCitationsFromResponseText,
+  extractRowSourceReferences,
+  normalizeCitation,
+  parseRefPathDetails,
+  renderApiBodyTemplate,
+  withCitationInstruction,
+};
+
+const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isDirectRun) {
+  main().catch((err) => {
+    console.error(`Fatal: ${err.message}`);
+    process.exitCode = 1;
+  });
+}
