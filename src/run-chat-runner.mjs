@@ -1831,7 +1831,7 @@ async function main() {
       "api-url": process.env.API_URL || "",
       "api-method": process.env.API_METHOD || "POST",
       "api-response-path": process.env.API_RESPONSE_PATH || "choices.0.message.content",
-      "timeout-ms": process.env.TIMEOUT_MS || "45000",
+      "timeout-ms": process.env.TIMEOUT_MS || "2147483647",
       "wait-ms": process.env.WAIT_MS || "500",
       "new-chat": envBool("NEW_CHAT", false),
       "debug-network": envBool("DEBUG_NETWORK", false),

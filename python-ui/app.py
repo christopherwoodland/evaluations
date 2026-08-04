@@ -507,7 +507,7 @@ def api_get(base_url: str, path: str) -> tuple[bool, Any]:
 
 def api_post_json(base_url: str, path: str, payload: dict[str, Any]) -> tuple[bool, Any]:
     try:
-        res = requests.post(f"{base_url}{path}", json=payload, timeout=600)
+        res = requests.post(f"{base_url}{path}", json=payload, timeout=2_147_483.647)
         content_type = (res.headers.get("content-type") or "").lower()
         if "application/json" in content_type:
             return res.ok, res.json()
@@ -527,7 +527,7 @@ def api_post_form(
     files: dict[str, tuple[str, bytes, str]],
 ) -> tuple[bool, Any]:
     try:
-        res = requests.post(f"{base_url}{path}", data=data, files=files, timeout=3600)
+        res = requests.post(f"{base_url}{path}", data=data, files=files, timeout=2_147_483.647)
         content_type = (res.headers.get("content-type") or "").lower()
         if "application/json" in content_type:
             return res.ok, res.json()
@@ -1005,7 +1005,13 @@ def render_config(settings: dict[str, Any], mode: str, profiles: list[dict[str, 
             debug_network = st.checkbox("Capture network log", value=False)
         selectors = st.text_input("Selectors path", value=settings["selectors"])
 
-    timeout_ms = st.number_input("Timeout (ms)", min_value=1000, step=500, value=45000)
+    timeout_ms = st.number_input(
+        "Timeout (ms)",
+        min_value=1000,
+        max_value=2_147_483_647,
+        step=1,
+        value=2_147_483_647,
+    )
     wait_ms = st.number_input("Wait after send (ms)", min_value=0, step=100, value=500)
 
     st.markdown("### JSONL output options")

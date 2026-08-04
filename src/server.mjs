@@ -1119,7 +1119,7 @@ async function executeRunFromRequest({ body, inputPathAbs, uploadedInputPath, fi
   add("output-dir", body.outputDir || DEFAULT_OUTPUT_DIR);
   add("url", body.url || DEFAULT_CHAT_URL);
   add("state-file", body.stateFile || DEFAULT_STATE_FILE);
-  add("timeout-ms", body.timeoutMs || process.env.TIMEOUT_MS || "45000");
+  add("timeout-ms", body.timeoutMs || process.env.TIMEOUT_MS || "2147483647");
   add("wait-ms", body.waitMs || process.env.WAIT_MS || "500");
   add("include-ground-truth", body.includeGroundTruth === "false" ? "false" : "true");
   add("include-context", body.includeContext === "true" ? "true" : "false");
