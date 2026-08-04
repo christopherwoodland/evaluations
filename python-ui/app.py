@@ -1009,10 +1009,6 @@ def render_config(settings: dict[str, Any], mode: str, profiles: list[dict[str, 
     wait_ms = st.number_input("Wait after send (ms)", min_value=0, step=100, value=500)
 
     st.markdown("### JSONL output options")
-    st.info(
-        "Optional source-reference columns: use sources_json for a JSON array of sources, or flat fields like source_title, source_url, ref_path, ref_pages, ref_scope. "
-        "Multiple refs per row are supported with numbered suffixes such as source_title_1/source_url_1/ref_path_1."
-    )
     profile = st.selectbox(
         "Export profile",
         ["foundry-basic", "foundry-context", "custom"],

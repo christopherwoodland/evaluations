@@ -617,77 +617,9 @@ function parseRefPathDetails(value) {
   return { ref_path, pages, scope };
 }
 
-function extractRowSourceReferences(row) {
-  if (!row || typeof row !== "object") return [];
-
-  const jsonField = getFieldCaseInsensitive(row, ["sources_json", "source_refs_json", "document_sources_json"]);
-  if (jsonField) {
-    try {
-      const parsed = JSON.parse(String(jsonField));
-      const list = Array.isArray(parsed) ? parsed : [parsed];
-      return list.map((entry) => normalizeCitation(entry)).filter(Boolean);
-    } catch {
-      // Fall through to column-based extraction.
-    }
-  }
-
-  const refs = [];
-  const suffixes = ["", "_1", "_2", "_3", "_4", "_5"];
-  for (const suffix of suffixes) {
-    const title = String(getFieldCaseInsensitive(row, [`source_title${suffix}`, `ref_title${suffix}`, `doc_title${suffix}`]) || "").trim();
-    const url = String(getFieldCaseInsensitive(row, [`source_url${suffix}`, `ref_url${suffix}`, `doc_url${suffix}`]) || "").trim();
-    const refPathRaw = String(getFieldCaseInsensitive(row, [`ref_path${suffix}`, `source_path${suffix}`, `doc_path${suffix}`]) || "").trim();
-    const pages = String(getFieldCaseInsensitive(row, [`ref_pages${suffix}`, `source_pages${suffix}`, `doc_pages${suffix}`]) || "").trim();
-    const scope = String(getFieldCaseInsensitive(row, [`ref_scope${suffix}`, `source_scope${suffix}`, `doc_scope${suffix}`]) || "").trim();
-
-    if (!title && !url && !refPathRaw) continue;
-    const parsedRef = parseRefPathDetails(refPathRaw);
-    refs.push(
-      normalizeCitation({
-        title,
-        url,
-        ref_path: parsedRef.ref_path || refPathRaw,
-        pages: pages || parsedRef.pages,
-        scope: scope || parsedRef.scope,
-      }),
-    );
-  }
-
-  return dedupeCitations(refs.filter(Boolean));
-}
-
-function formatSourceReferenceInstruction(sourceRefs) {
-  const refs = Array.isArray(sourceRefs) ? sourceRefs.filter(Boolean) : [];
-  if (!refs.length) return "";
-
-  const lines = [
-    "Use these provided document references when relevant.",
-    "If you cite one of them, preserve its exact Source title, URL, and Ref path in the Sources section.",
-    "Provided document references:",
-  ];
-
-  for (const ref of refs) {
-    const parts = [];
-    if (ref.title) parts.push(`- Source title: ${ref.title}`);
-    if (ref.url) parts.push(`URL: ${ref.url}`);
-    if (ref.ref_path) {
-      let refPathLine = `Ref path: ${ref.ref_path}`;
-      const detailParts = [ref.pages, ref.scope].filter(Boolean);
-      if (detailParts.length) {
-        refPathLine += ` (${detailParts.join("; ")})`;
-      }
-      parts.push(refPathLine);
-    }
-    if (parts.length) lines.push(parts.join("\n"));
-  }
-
-  return lines.join("\n");
-}
-
-function withCitationInstruction(query, sourceRefs = []) {
+function withCitationInstruction(query) {
   const base = String(query || "").trim();
   if (!base) return base;
-  const sourceInstruction = formatSourceReferenceInstruction(sourceRefs);
   const tail = [
     'Please provide citations/sources for your answer.',
     'At the end of the answer, include a markdown heading exactly named "**Sources**".',
@@ -695,29 +627,12 @@ function withCitationInstruction(query, sourceRefs = []) {
     '- Source title: <title>',
     'URL: <url>',
     'Ref path: <ref path>',
-    'If page or scope metadata exists for a provided document reference, append it to the Ref path line in parentheses, for example: Ref path: file.json (Pages 2-3; personal document scope).',
+    'If page or scope metadata exists in the source you are citing, append it to the Ref path line in parentheses, for example: Ref path: file.json (Pages 2-3; personal document scope).',
     'Do not collapse these onto one line and do not omit labels.',
-    'If a provided document reference is used, preserve its exact Source title, URL, and Ref path.',
+    'Only include a Ref path when the response itself is grounded enough to provide one.',
     'If no verifiable sources are available, explicitly state "No sources available."',
   ].join(" ");
-  return [base, sourceInstruction, tail].filter(Boolean).join("\n\n");
-}
-
-function enrichCitationsWithSourceReferences(citations, sourceRefs) {
-  const refs = Array.isArray(sourceRefs) ? sourceRefs.filter(Boolean) : [];
-  if (!refs.length) return dedupeCitations(citations || []);
-
-  return dedupeCitations((citations || []).map((citation) => {
-    const normalized = normalizeCitation(citation) || {};
-    const url = String(normalized.url || "").trim().toLowerCase();
-    const title = String(normalized.title || normalized.text || "").trim().toLowerCase();
-    const match = refs.find((ref) => {
-      const refUrl = String(ref.url || "").trim().toLowerCase();
-      const refTitle = String(ref.title || "").trim().toLowerCase();
-      return (url && refUrl && url === refUrl) || (title && refTitle && title.includes(refTitle));
-    });
-    return match ? { ...match, ...normalized } : normalized;
-  }));
+  return [base, tail].filter(Boolean).join("\n\n");
 }
 
 function tryExec(command, cwd) {
@@ -1382,7 +1297,6 @@ async function runUiMode({
     const query = String(row[queryColumn] ?? "").trim();
     const reference = String(row[referenceColumn] ?? "").trim();
     const contextValue = contextColumn ? String(row[contextColumn] ?? "").trim() : "";
-    const sourceRefs = extractRowSourceReferences(row);
 
     if (!query) {
       results.push({
@@ -1415,7 +1329,7 @@ async function runUiMode({
 
       const prior = await getAssistantCount(page, selectors);
       const priorFallback = await getAssistantFallbackSnapshot(page);
-      await setPromptInInput(page, inputHit.locator, withCitationInstruction(query, sourceRefs));
+      await setPromptInInput(page, inputHit.locator, withCitationInstruction(query));
 
       const sentByButton = await safeClick(page, selectors.send);
       if (!sentByButton) {
@@ -1426,7 +1340,7 @@ async function runUiMode({
 
       const responseText = await waitForAssistantReply(page, selectors, prior, priorFallback, timeoutMs);
 
-      const citations = enrichCitationsWithSourceReferences(extractCitationsFromResponseText(responseText), sourceRefs);
+      const citations = extractCitationsFromResponseText(responseText);
 
       results.push({
         ...row,
@@ -1523,7 +1437,6 @@ async function runApiMode({
     const query = String(row[queryColumn] ?? "").trim();
     const reference = String(row[referenceColumn] ?? "").trim();
     const contextValue = contextColumn ? String(row[contextColumn] ?? "").trim() : "";
-    const sourceRefs = extractRowSourceReferences(row);
 
     if (!query) {
       results.push({
@@ -1543,7 +1456,7 @@ async function runApiMode({
 
     try {
       const requestStarted = Date.now();
-      const effectivePrompt = withCitationInstruction(query, sourceRefs);
+      const effectivePrompt = withCitationInstruction(query);
       const requestBody = apiBodyTemplate
         ? renderApiBodyTemplate(apiBodyTemplate, effectivePrompt)
         : { messages: [{ role: "user", content: effectivePrompt }] };
@@ -1573,10 +1486,7 @@ async function runApiMode({
       const responseVal = deepGet(data, apiResponsePath || "choices.0.message.content");
       const responseText = typeof responseVal === "string" ? responseVal : JSON.stringify(responseVal ?? data);
       const structuredCitations = extractCitations(data);
-      const citations = enrichCitationsWithSourceReferences(
-        structuredCitations.length ? structuredCitations : extractCitationsFromResponseText(responseText),
-        sourceRefs,
-      );
+      const citations = structuredCitations.length ? structuredCitations : extractCitationsFromResponseText(responseText);
 
       results.push({
         ...row,
@@ -1695,7 +1605,6 @@ async function runSimpleChatApiMode({
     const query = String(row[queryColumn] ?? "").trim();
     const reference = String(row[referenceColumn] ?? "").trim();
     const contextValue = contextColumn ? String(row[contextColumn] ?? "").trim() : "";
-    const sourceRefs = extractRowSourceReferences(row);
     let requestPreviewJson = "";
 
     if (!query) {
@@ -1736,7 +1645,7 @@ async function runSimpleChatApiMode({
 
       const payload = {
         ...templatePayload,
-        message: withCitationInstruction(query, sourceRefs),
+        message: withCitationInstruction(query),
         conversation_id: conversationId,
       };
 
@@ -1774,7 +1683,7 @@ async function runSimpleChatApiMode({
         throw new Error("No assistant content chunks found in SSE response.");
       }
 
-      const effectiveCitations = enrichCitationsWithSourceReferences(extractCitationsFromResponseText(responseText), sourceRefs);
+      const effectiveCitations = extractCitationsFromResponseText(responseText);
 
       results.push({
         ...row,
@@ -2113,7 +2022,6 @@ async function main() {
 
 export {
   extractCitationsFromResponseText,
-  extractRowSourceReferences,
   normalizeCitation,
   parseRefPathDetails,
   renderApiBodyTemplate,

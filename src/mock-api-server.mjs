@@ -25,53 +25,23 @@ function extractQuery(body) {
   return "";
 }
 
-function extractProvidedReferences(promptText) {
-  const text = String(promptText || "");
-  const marker = "Provided document references:";
-  const idx = text.indexOf(marker);
-  if (idx < 0) return [];
-
-  const lines = text.slice(idx + marker.length).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const refs = [];
-  let current = null;
-
-  for (const line of lines) {
-    if (/^Please provide citations\/sources/i.test(line)) break;
-    if (line.startsWith("- Source title:")) {
-      if (current) refs.push(current);
-      current = { title: line.replace(/^- Source title:\s*/i, "").trim() };
-      continue;
-    }
-    if (/^URL:/i.test(line)) {
-      if (!current) current = {};
-      current.url = line.replace(/^URL:\s*/i, "").trim();
-      continue;
-    }
-    if (/^Ref path:/i.test(line)) {
-      if (!current) current = {};
-      current.ref = line.replace(/^Ref path:\s*/i, "").trim();
-      continue;
-    }
-  }
-
-  if (current) refs.push(current);
-  return refs.filter((ref) => ref.title || ref.url || ref.ref);
-}
-
 const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && req.url === "/chat") {
     try {
       const body = await readJsonBody(req);
       const query = extractQuery(body);
-      const refs = extractProvidedReferences(query);
-      const sourceBlock = refs.length
-        ? `\n\n**Sources**\n\n${refs.map((ref) => [
-            `- Source title: ${ref.title || "Unknown"}`,
-            ref.url ? `URL: ${ref.url}` : "",
-            ref.ref ? `Ref path: ${ref.ref}` : "",
-          ].filter(Boolean).join("\n")).join("\n")}`
-        : "";
-      const content = `MOCK_REPLY: ${query || "(empty query)"}${sourceBlock}`;
+      const sourceBlock = [
+        "",
+        "**Sources**",
+        "",
+        "- Source title: WRA Co Primer and Bullet Help",
+        "URL: https://cartridge-corner.com/wrahelp.htm",
+        "Ref path: wra_primer_bullet_help.json (Pages 2-3; personal document scope)",
+        "- Source title: Common Bullet Types",
+        "URL: https://cartridge-corner.com/Bullets.html",
+        "Ref path: common_bullet_types.json (Page 1; personal document scope)",
+      ].join("\n");
+      const content = `MOCK_REPLY: ${query || "(empty query)"}\n\n${sourceBlock}`;
 
       const payload = {
         choices: [

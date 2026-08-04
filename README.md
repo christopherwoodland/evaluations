@@ -32,17 +32,11 @@ Recommended columns:
 - `response`
 - `context` (optional)
 
-Optional citation/source metadata columns:
-
-- `sources_json`: JSON array of source objects for the row, for example `[{"title":"WRA Co Primer and Bullet Help","url":"https://cartridge-corner.com/wrahelp.htm","ref_path":"wra_primer_bullet_help.json","pages":"Pages 2-3","scope":"personal document scope"}]`
-- or column-based fields such as `source_title`, `source_url`, `ref_path`, `ref_pages`, `ref_scope`
-- for multiple row-specific references, suffix numbered columns like `source_title_1`, `source_url_1`, `ref_path_1`, `source_title_2`, `source_url_2`, `ref_path_2`
-
 Notes:
 
 - `response` is treated as the expected answer.
 - If context inclusion is enabled in JSONL options, `context` is written into JSONL output.
-- When source metadata is present, the runner adds it to the prompt and preserves `ref_path` metadata in output citations when the model cites those sources.
+- Citations in output are derived from the model response or structured API response payloads, not from spreadsheet-side source metadata.
 
 Templates:
 
@@ -180,7 +174,7 @@ Excel output includes:
 
 JSONL output includes one object per row with response plus optional fields based on run options (for example context/meta/ground_truth).
 
-When row-level source metadata is present, JSONL citations can also include:
+When the model or API response includes rich citation details, JSONL citations can include:
 
 - `title`
 - `url`
@@ -188,7 +182,7 @@ When row-level source metadata is present, JSONL citations can also include:
 - `pages`
 - `scope`
 
-The runner asks the model for an exact `**Sources**` block and preserves these reference fields when the cited source matches the row metadata.
+The runner asks the model for an exact `**Sources**` block and preserves these fields only when they appear in the response.
 
 ## Current UI flow
 
